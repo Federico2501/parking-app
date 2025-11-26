@@ -868,7 +868,8 @@ def view_suplente(profile):
 # MAIN
 # ---------------------------------------------
 def main():
-    st.title("🅿️ Parking Empresa")
+    st.image("Logo_GLS.png", width=200)
+    st.title("Parking GLS KM0")
 
     rest_url, headers, anon_key = get_rest_info()
 
