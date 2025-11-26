@@ -79,12 +79,114 @@ def view_admin(profile):
 
 def view_titular(profile):
     st.subheader("Panel TITULAR")
-    st.write(f"Nombre: {profile.get('nombre')}")
-    if profile.get("plaza_id"):
-        st.write(f"Tu plaza asignada: **P-{profile.get('plaza_id')}**")
-    else:
-        st.warning("Aún no tienes plaza asignada en app_users.")
-    st.info("Aquí añadiremos la pantalla para marcar qué días/franjas **NO** usas tu plaza.")
+
+    nombre = profile.get("nombre")
+    plaza_id = profile.get("plaza_id")
+
+    st.write(f"Nombre: {nombre}")
+
+    if not plaza_id:
+        st.error("Aún no tienes plaza asignada en app_users (plaza_id es NULL).")
+        return
+
+    st.write(f"Tu plaza asignada: **P-{plaza_id}**")
+    st.markdown("Marca qué franjas **cedes** tu plaza esta semana (lunes a viernes):")
+
+    # Calculamos la semana actual (lunes a viernes)
+    hoy = date.today()
+    lunes = hoy - timedelta(days=hoy.weekday())  # weekday(): 0 = lunes
+    dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
+
+    # Obtenemos info de Supabase
+    rest_url, headers, _ = get_rest_info()
+
+    # Leer todos los slots de esta plaza
+    try:
+        resp = requests.get(
+            f"{rest_url}/slots",
+            headers=headers,
+            params={
+                "select": "fecha,franja,owner_usa,reservado_por",
+                "plaza_id": f"eq.{plaza_id}",
+            },
+            timeout=10,
+        )
+        slots = resp.json() if resp.status_code == 200 else []
+    except Exception as e:
+        st.error("No se ha podido leer el estado actual de la plaza.")
+        st.code(str(e))
+        slots = []
+
+    # Mapeamos (fecha, franja) -> owner_usa
+    estado = {}
+    for s in slots:
+        try:
+            f = date.fromisoformat(s["fecha"])
+            estado[(f, s["franja"])] = s["owner_usa"]
+        except Exception:
+            continue
+
+    # Construimos la tabla semanal: día vs mañana/tarde
+    st.markdown("### Semana actual")
+
+    header_cols = st.columns(3)
+    header_cols[0].markdown("**Día**")
+    header_cols[1].markdown("**Mañana**")
+    header_cols[2].markdown("**Tarde**")
+
+    # Guardamos aquí la decisión de ceder / no por cada día/franja
+    cedencias = {}
+
+    for d in dias_semana:
+        cols = st.columns(3)
+        # Columna día
+        cols[0].write(d.strftime("%a %d/%m"))
+
+        for idx, franja in enumerate(["M", "T"], start=1):
+            # Por defecto, si no hay registro, el titular USA la plaza
+            owner_usa = estado.get((d, franja), True)
+            cedida_por_defecto = not owner_usa  # si no la usa, es que la cedió
+
+            key = f"cede_{d.isoformat()}_{franja}"
+            cedida = cols[idx].checkbox(
+                "Cedo",
+                value=cedida_por_defecto,
+                key=key,
+            )
+            cedencias[(d, franja)] = cedida
+
+    st.markdown("---")
+    if st.button("Guardar cambios de la semana"):
+        try:
+            # Para cada día/franja, hacemos upsert del slot
+            for (d, franja), cedida in cedencias.items():
+                owner_usa = not cedida  # si la cedo, yo no la uso
+
+                payload = [{
+                    "fecha": d.isoformat(),
+                    "plaza_id": plaza_id,
+                    "franja": franja,
+                    "owner_usa": owner_usa,
+                    # si el titular vuelve a usarla, nos cargamos cualquier reserva anterior
+                    "reservado_por": None if owner_usa else None,
+                    "estado": "CONFIRMADO",
+                }]
+
+                local_headers = headers.copy()
+                local_headers["Prefer"] = "resolution=merge-duplicates"
+
+                r = requests.post(
+                    f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                    headers=local_headers,
+                    json=payload,
+                    timeout=10,
+                )
+                r.raise_for_status()
+
+            st.success("Disponibilidad de la semana actualizada ✅")
+        except Exception as e:
+            st.error("Error al guardar la disponibilidad.")
+            st.code(str(e))
 
 def view_suplente(profile):
     st.subheader("Panel SUPLENTE")
