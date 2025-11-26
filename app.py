@@ -920,8 +920,12 @@ def main():
         st.session_state.profile = None
         st.rerun()
 
+    # Bloque para cambiar la contraseña del usuario logueado
+    password_change_panel()
+
     st.markdown("---")
 
+    
     # Vista según rol
     rol = profile["rol"]
     if rol == "ADMIN":
