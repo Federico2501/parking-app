@@ -419,15 +419,15 @@ def view_suplente(profile):
             },
             timeout=10,
         )
-        reservas_usuario = resp_count.json() if resp_count.status_code == 200 else []
+        reservas_usuario_raw = resp_count.json() if resp_count.status_code == 200 else []
     except Exception as e:
         st.error("No se ha podido comprobar el número de reservas del mes.")
         st.code(str(e))
-        reservas_usuario = []
+        reservas_usuario_raw = []
 
     # Filtramos en código hasta el primer día del mes siguiente
     reservas_mes = []
-    for r in reservas_usuario:
+    for r in reservas_usuario_raw:
         try:
             fecha_str = r["fecha"][:10]
             f = date.fromisoformat(fecha_str)
@@ -438,10 +438,6 @@ def view_suplente(profile):
 
     usadas_mes = len(reservas_mes)
     st.write(f"Franjas reservadas este mes: **{usadas_mes} / 10**")
-
-    if usadas_mes >= 10:
-        st.warning("Has llegado al máximo de 10 franjas este mes. No puedes hacer más reservas.")
-        return
 
     # ---------------------------
     # 2) Construir semana actual (lunes-viernes)
@@ -510,6 +506,7 @@ def view_suplente(profile):
     header_cols[2].markdown("**Tarde**")
 
     reserva_seleccionada = None
+    cancel_seleccionada = None
 
     # Pintamos la semana
     for d in dias_semana:
@@ -523,6 +520,8 @@ def view_suplente(profile):
                 cols[idx].markdown(
                     f"✅ Has reservado\n**P-{plaza_id}**"
                 )
+                if cols[idx].button("Cancelar", key=f"cancel_{d.isoformat()}_{franja}"):
+                    cancel_seleccionada = (d, franja, plaza_id)
                 continue
 
             num_disponibles = disponibles.get((d, franja), 0)
@@ -537,19 +536,59 @@ def view_suplente(profile):
                 cols[idx].markdown("⬜️ _No disponible_")
 
     # ---------------------------
-    # 4) Si el usuario pulsa un botón de reserva
+    # 4) Cancelar reserva (si ha pulsado 'Cancelar')
+    # ---------------------------
+    if cancel_seleccionada is not None:
+        dia_cancel, franja_cancel, plaza_cancel = cancel_seleccionada
+        try:
+            payload = [{
+                "fecha": dia_cancel.isoformat(),
+                "plaza_id": plaza_cancel,
+                "franja": franja_cancel,
+                "owner_usa": False,    # sigue cedida por el titular
+                "reservado_por": None, # eliminamos la reserva
+            }]
+
+            local_headers = headers.copy()
+            local_headers["Prefer"] = "resolution=merge-duplicates"
+
+            r_update = requests.post(
+                f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                headers=local_headers,
+                json=payload,
+                timeout=10,
+            )
+
+            if r_update.status_code >= 400:
+                st.error("Supabase ha devuelto un error al cancelar la reserva:")
+                st.code(r_update.text)
+                return
+
+            st.success(
+                f"Reserva cancelada para {dia_cancel.strftime('%d/%m')} "
+                f"{'mañana' if franja_cancel=='M' else 'tarde'} "
+                f"(plaza P-{plaza_cancel})."
+            )
+            st.rerun()
+
+        except Exception as e:
+            st.error("Ha ocurrido un error al intentar cancelar la reserva.")
+            st.code(str(e))
+            return
+
+    # ---------------------------
+    # 5) Hacer reserva nueva (si ha pulsado 'Reservar')
     # ---------------------------
     if reserva_seleccionada is not None:
         dia_reserva, franja_reserva = reserva_seleccionada
 
-        # Re-chequeo por si se ha llenado
+        # Re-chequeo por si ya llegó al límite (otra sesión abierta, etc.)
         if usadas_mes >= 10:
             st.error("Ya has alcanzado el máximo de 10 franjas este mes.")
             return
 
-        # ------------------- NUEVO BLOQUE DEBUG -------------------
         try:
-            # 1) Buscar plaza cedida y libre
+            # Buscar una plaza concreta cedida y libre
             resp_libre = requests.get(
                 f"{rest_url}/slots",
                 headers=headers,
@@ -578,13 +617,13 @@ def view_suplente(profile):
             slot = libres[0]
             plaza_id = slot["plaza_id"]
 
-            # 2) Upsert del slot para reservarlo
+            # Upsert del slot: misma fecha/plaza/franja pero con reservado_por = usuario
             payload = [{
                 "fecha": dia_reserva.isoformat(),
                 "plaza_id": plaza_id,
                 "franja": franja_reserva,
-               "owner_usa": False,       # sigue siendo cesión del titular
-                "reservado_por": user_id, # asignada a este suplente
+                "owner_usa": False,       # sigue siendo cesión del titular
+                "reservado_por": user_id, # ahora asignada a este suplente
             }]
 
             local_headers = headers.copy()
@@ -599,7 +638,7 @@ def view_suplente(profile):
 
             if r_update.status_code >= 400:
                 st.error("Supabase ha devuelto un error al guardar la reserva:")
-                st.code(r_update.text)   # ← AQUÍ VEREMOS EL MENSAJE REAL
+                st.code(r_update.text)
                 return
 
             st.success(
@@ -607,10 +646,12 @@ def view_suplente(profile):
                 f"{'mañana' if franja_reserva=='M' else 'tarde'}. "
                 f"Plaza asignada: **P-{plaza_id}** ✅"
             )
+            st.rerun()
 
         except Exception as e:
             st.error("Ha ocurrido un error al intentar reservar la plaza.")
             st.code(str(e))
+            return
 
 # ---------------------------------------------
 # MAIN
