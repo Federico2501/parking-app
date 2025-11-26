@@ -116,14 +116,19 @@ def view_titular(profile):
         st.code(str(e))
         slots = []
 
-    # Mapeamos (fecha, franja) -> owner_usa
+    # Mapeamos:
+    #   - estado[(fecha, franja)] -> owner_usa
+    #   - reservas[(fecha, franja)] -> reservado_por (None o uuid)
     estado = {}
+    reservas = {}
+
     for s in slots:
         try:
-            # Cortamos a 'YYYY-MM-DD' por si viene con hora/zona
-            fecha_str = s["fecha"][:10]
+            fecha_str = s["fecha"][:10]   # por si viene con hora
             f = date.fromisoformat(fecha_str)
-            estado[(f, s["franja"])] = s["owner_usa"]
+            franja = s["franja"]
+            estado[(f, franja)] = s["owner_usa"]
+            reservas[(f, franja)] = s["reservado_por"]
         except Exception:
             continue
 
@@ -134,6 +139,7 @@ def view_titular(profile):
     header_cols[1].markdown("**Mañana**")
     header_cols[2].markdown("**Tarde**")
 
+    # Solo guardaremos decisiones en franjas NO reservadas
     cedencias = {}
 
     for d in dias_semana:
@@ -143,7 +149,14 @@ def view_titular(profile):
         for idx, franja in enumerate(["M", "T"], start=1):
             owner_usa = estado.get((d, franja), True)
             cedida_por_defecto = not owner_usa  # si no la usa, es que la cedió
+            reservado_por = reservas.get((d, franja))
 
+            if reservado_por is not None:
+                # Ya hay un suplente reservado: el titular NO puede tocarlo
+                cols[idx].markdown("✅ Cedida (reservada)")
+                continue
+
+            # Franja sin reserva: el titular puede marcar/desmarcar "Cedo"
             key = f"cede_{d.isoformat()}_{franja}"
             cedida = cols[idx].checkbox(
                 "Cedo",
