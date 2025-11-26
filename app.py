@@ -49,7 +49,7 @@ def main():
     if "user" not in st.session_state:
         st.session_state.user = None
 
-    # If not logged in → show login form
+    # Si NO hay usuario logado → formulario de login
     if st.session_state.user is None:
         st.subheader("Iniciar sesión")
 
@@ -61,21 +61,21 @@ def main():
             if user_data:
                 st.session_state.user = user_data
                 st.success("Login correcto")
-                st.experimental_rerun()
+                st.rerun()  # << antes era experimental_rerun
             else:
                 st.error("Email o contraseña incorrectos")
 
-        return  # don't continue
+        return  # no seguimos
 
     # -------------------------------------
-    # USER IS LOGGED IN
+    # USER LOGGED IN
     # -------------------------------------
     user = st.session_state.user
     st.success(f"Sesión iniciada como: {user['user']['email']}")
 
     if st.button("Cerrar sesión"):
         st.session_state.user = None
-        st.experimental_rerun()
+        st.rerun()
 
     st.subheader("Panel de usuario")
     st.write("Aquí construiremos:")
