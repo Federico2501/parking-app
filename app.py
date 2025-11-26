@@ -340,7 +340,7 @@ def view_suplente(profile):
                 f"{rest_url}/slots",
                 headers=headers,
                 params={
-                    "select": "id,plaza_id",
+                    "select": "plaza_id",
                     "fecha": f"eq.{dia_reserva.isoformat()}",
                     "franja": f"eq.{franja_reserva}",
                     "owner_usa": "eq.false",
@@ -357,15 +357,25 @@ def view_suplente(profile):
                 return
 
             slot = libres[0]
-            slot_id = slot["id"]
             plaza_id = slot["plaza_id"]
 
-            # Asignar la plaza al usuario
-            r_update = requests.patch(
-                f"{rest_url}/slots",
-                headers=headers,
-                params={"id": f"eq.{slot_id}"},
-                json={"reservado_por": user_id, "estado": "RESERVADO"},
+            # Upsert del slot: misma fecha/plaza/franja pero con reservado_por = usuario
+            payload = [{
+                "fecha": dia_reserva.isoformat(),
+                "plaza_id": plaza_id,
+                "franja": franja_reserva,
+                "owner_usa": False,            # sigue siendo cesión del titular
+                "reservado_por": user_id,       # ahora asignada a este suplente
+                "estado": "RESERVADO",
+            }]
+
+            local_headers = headers.copy()
+            local_headers["Prefer"] = "resolution=merge-duplicates"
+
+            r_update = requests.post(
+                f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                headers=local_headers,
+                json=payload,
                 timeout=10,
             )
             r_update.raise_for_status()
