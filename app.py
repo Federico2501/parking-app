@@ -100,11 +100,13 @@ def view_admin(profile):
         if u.get("rol") == "TITULAR" and u.get("plaza_id") is not None
     }
 
+    plazas_ids = sorted(plaza_to_titular.keys())
+
     # Contadores
     n_titulares = sum(1 for u in usuarios if u.get("rol") == "TITULAR")
     n_suplentes = sum(1 for u in usuarios if u.get("rol") == "SUPLENTE")
     n_admins    = sum(1 for u in usuarios if u.get("rol") == "ADMIN")
-    plazas_totales = len({u["plaza_id"] for u in usuarios if u.get("rol") == "TITULAR" and u.get("plaza_id") is not None})
+    plazas_totales = len(plazas_ids)
 
     st.markdown("### Resumen de usuarios / plazas")
 
@@ -171,7 +173,59 @@ def view_admin(profile):
     c3.metric("Cedidas libres", len(libres))
 
     # ---------------------------
-    # 3) Tabla detalle de la semana
+    # 3) Tablero visual de plazas con selector de día
+    # ---------------------------
+    st.markdown("### Ocupación por día (tablero 100 plazas)")
+
+    dia_seleccionado = st.selectbox(
+        "Selecciona día de la semana",
+        options=dias_semana,
+        format_func=lambda d: d.strftime("%a %d/%m"),
+    )
+
+    # Por plaza: ¿tiene al menos una franja libre en el día seleccionado?
+    free_by_plaza = {pid: False for pid in plazas_ids}
+
+    for s in slots:
+        if s["fecha"] != dia_seleccionado:
+            continue
+        pid = s["plaza_id"]
+        if pid not in free_by_plaza:
+            continue
+
+        # Libre = owner_usa False y sin reserva de suplente
+        if s["owner_usa"] is False and s["reservado_por"] is None:
+            free_by_plaza[pid] = True
+
+    # Grid 10x10 = 100 casillas
+    rows = 10
+    cols = 10
+
+    for i in range(rows):
+        cols_streamlit = st.columns(cols)
+        for j in range(cols):
+            idx = i * cols + j
+            if idx < len(plazas_ids):
+                pid = plazas_ids[idx]
+                is_free = free_by_plaza.get(pid, False)
+                color = "🟩" if is_free else "🟥"
+                html = f"""
+                <div style='text-align:center; font-size:24px;'>
+                    {color}<br/>
+                    <span style='font-size:12px;'>P-{pid}</span>
+                </div>
+                """
+                cols_streamlit[j].markdown(html, unsafe_allow_html=True)
+            else:
+                html = """
+                <div style='text-align:center; font-size:24px; color:#bbbbbb;'>
+                    ⬜️
+                </div>
+                """
+                cols_streamlit[j].markdown(html, unsafe_allow_html=True)
+
+    # ---------------------------
+    # 4) Tabla detalle de la semana
     # ---------------------------
     filas = []
     for s in sorted(slots, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
@@ -191,7 +245,6 @@ def view_admin(profile):
         elif not owner_usa and reservado_por is not None:
             estado = f"Cedido y reservado por {suplente}"
         else:
-            # Caso raro, por si en BBDD hay algo inconsistente
             estado = "Inconsistente"
 
         filas.append({
