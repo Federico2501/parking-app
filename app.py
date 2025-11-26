@@ -163,7 +163,6 @@ def view_titular(profile):
                     "plaza_id": plaza_id,
                     "franja": franja,
                     "owner_usa": owner_usa,
-                    "reservado_por": None,  # si cambia de opinión, liberamos cualquier reserva
                     "estado": "CONFIRMADO",
                 }]
 
