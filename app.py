@@ -214,7 +214,7 @@ def view_admin(profile):
             stats["ocupadas"] += faltan
 
     # Grid 10x10 = 100 casillas
-    rows = 10
+    rows = 5
     cols = 10
 
     for i in range(rows):
