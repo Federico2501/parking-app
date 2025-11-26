@@ -318,6 +318,31 @@ def view_titular(profile):
             reservas[(f, franja)] = s["reservado_por"]
         except Exception:
             continue
+        # ---------------------------
+    # Agenda del titular (resumen semana)
+    # ---------------------------
+    filas_agenda = []
+    for d in dias_semana:
+        fila = {"Día": d.strftime("%a %d/%m")}
+        for franja, etiqueta in [("M", "Mañana"), ("T", "Tarde")]:
+            owner_usa = estado.get((d, franja), True)
+            reservado_por = reservas.get((d, franja))
+
+            if reservado_por is not None:
+                texto = "Cedida (reservada)"
+            else:
+                if owner_usa:
+                    texto = "Titular usa"
+                else:
+                    texto = "Cedida (libre)"
+
+            fila[etiqueta] = texto
+        filas_agenda.append(fila)
+
+    st.markdown("### Tu agenda esta semana")
+    import pandas as pd
+    df_agenda = pd.DataFrame(filas_agenda)
+    st.table(df_agenda)
 
     st.markdown("### Semana actual")
 
