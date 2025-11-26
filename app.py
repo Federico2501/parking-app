@@ -329,12 +329,13 @@ def view_suplente(profile):
     if reserva_seleccionada is not None:
         dia_reserva, franja_reserva = reserva_seleccionada
 
-        # Re-chequeo rápido por si se ha llenado en medio (opcional)
+        # Re-chequeo por si se ha llenado
         if usadas_mes >= 10:
             st.error("Ya has alcanzado el máximo de 10 franjas este mes.")
             return
 
-       try:
+        # ------------------- NUEVO BLOQUE DEBUG -------------------
+        try:
             # 1) Buscar plaza cedida y libre
             resp_libre = requests.get(
                 f"{rest_url}/slots",
