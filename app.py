@@ -66,6 +66,79 @@ def load_profile(user_id):
     return data[0]
 
 # ---------------------------------------------
+# Cambio contraseña usuario logeado       
+# ---------------------------------------------
+
+def password_change_panel():
+    """Bloque de UI para que el usuario cambie su contraseña."""
+    auth = st.session_state.get("auth")
+    if not auth:
+        return  # por si acaso
+
+    user = auth["user"]
+    email = user["email"]
+
+    # Obtenemos anon_key para usar en llamadas a Auth
+    _, _, anon_key = get_rest_info()
+    access_token = auth["access_token"]
+
+    with st.expander("Cambiar contraseña"):
+        st.write(f"Usuario: **{email}**")
+
+        current_pw = st.text_input(
+            "Contraseña actual",
+            type="password",
+            key="pw_actual"
+        )
+        new_pw = st.text_input(
+            "Nueva contraseña",
+            type="password",
+            key="pw_nueva"
+        )
+        new_pw2 = st.text_input(
+            "Repite la nueva contraseña",
+            type="password",
+            key="pw_nueva2"
+        )
+
+        if st.button("Actualizar contraseña"):
+            # Validaciones básicas
+            if not current_pw or not new_pw or not new_pw2:
+                st.error("Rellena todos los campos.")
+                return
+            if new_pw != new_pw2:
+                st.error("Las nuevas contraseñas no coinciden.")
+                return
+            if len(new_pw) < 8:
+                st.warning("Te recomiendo una contraseña de al menos 8 caracteres.")
+                # seguimos, pero avisamos
+
+            # 1) Verificar que la contraseña actual es correcta
+            auth_test = login(email, current_pw, anon_key)
+            if not auth_test:
+                st.error("La contraseña actual no es correcta.")
+                return
+
+            # 2) Llamar a Supabase para cambiar la contraseña
+            url = st.secrets["SUPABASE_URL"].rstrip("/") + "/auth/v1/user"
+            headers = {
+                "apikey": anon_key,
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
+            payload = {"password": new_pw}
+
+            try:
+                resp = requests.put(url, headers=headers, json=payload, timeout=10)
+                if resp.status_code == 200:
+                    st.success("Contraseña actualizada correctamente ✅")
+                else:
+                    st.error("No se ha podido actualizar la contraseña.")
+                    st.code(resp.text)
+            except Exception as e:
+                st.error("Error al conectar con el servidor de autenticación.")
+                st.code(str(e))
+# ---------------------------------------------
 # Vistas por rol
 # ---------------------------------------------
 def view_admin(profile):
