@@ -183,19 +183,35 @@ def view_admin(profile):
         format_func=lambda d: d.strftime("%a %d/%m"),
     )
 
-    # Por plaza: ¿tiene al menos una franja libre en el día seleccionado?
-    free_by_plaza = {pid: False for pid in plazas_ids}
+    # Por plaza: contamos franjas libres / ocupadas en el día seleccionado
+    plazas_stats = {
+        pid: {"libres": 0, "ocupadas": 0}
+        for pid in plazas_ids
+    }
 
     for s in slots:
         if s["fecha"] != dia_seleccionado:
             continue
         pid = s["plaza_id"]
-        if pid not in free_by_plaza:
+        if pid not in plazas_stats:
             continue
 
-        # Libre = owner_usa False y sin reserva de suplente
-        if s["owner_usa"] is False and s["reservado_por"] is None:
-            free_by_plaza[pid] = True
+        owner_usa = s["owner_usa"]
+        reservado_por = s["reservado_por"]
+
+        # Libre = cedida por titular y sin reserva
+        if owner_usa is False and reservado_por is None:
+            plazas_stats[pid]["libres"] += 1
+        else:
+            plazas_stats[pid]["ocupadas"] += 1
+
+    # Ajuste: franjas que no tienen registro las consideramos ocupadas
+    # (2 franjas posibles por día: mañana y tarde)
+    for pid, stats in plazas_stats.items():
+        total_registradas = stats["libres"] + stats["ocupadas"]
+        if total_registradas < 2:
+            faltan = 2 - total_registradas
+            stats["ocupadas"] += faltan
 
     # Grid 10x10 = 100 casillas
     rows = 10
@@ -207,8 +223,19 @@ def view_admin(profile):
             idx = i * cols + j
             if idx < len(plazas_ids):
                 pid = plazas_ids[idx]
-                is_free = free_by_plaza.get(pid, False)
-                color = "🟩" if is_free else "🟥"
+                stats = plazas_stats.get(pid, {"libres": 0, "ocupadas": 2})
+                libres = stats["libres"]
+
+                # Verde: las 2 franjas libres
+                # Azul: solo 1 libre
+                # Rojo: 0 libres
+                if libres == 2:
+                    color = "🟩"
+                elif libres == 1:
+                    color = "🟦"
+                else:
+                    color = "🟥"
+
                 html = f"""
                 <div style='text-align:center; font-size:24px;'>
                     {color}<br/>
@@ -223,7 +250,6 @@ def view_admin(profile):
                 </div>
                 """
                 cols_streamlit[j].markdown(html, unsafe_allow_html=True)
-
     # ---------------------------
     # 4) Tabla detalle de la semana
     # ---------------------------
