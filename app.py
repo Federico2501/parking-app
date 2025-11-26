@@ -190,8 +190,197 @@ def view_titular(profile):
 
 def view_suplente(profile):
     st.subheader("Panel SUPLENTE")
-    st.write(f"Nombre: {profile.get('nombre')}")
-    st.info("Aquí añadiremos la pantalla para ver huecos libres y reservar (máx 10 franjas/mes).")
+
+    # Info básica de usuario
+    nombre = profile.get("nombre")
+    st.write(f"Nombre: {nombre}")
+
+    # Obtenemos el user_id desde la sesión de Auth
+    auth = st.session_state.get("auth")
+    if not auth:
+        st.error("No se ha podido obtener la información de usuario (auth).")
+        return
+    user_id = auth["user"]["id"]
+
+    rest_url, headers, _ = get_rest_info()
+
+    # ---------------------------
+    # 1) Comprobar franjas usadas este mes (máx 10)
+    # ---------------------------
+    hoy = date.today()
+    first_day = hoy.replace(day=1)
+    # primer día del mes siguiente
+    if hoy.month == 12:
+        next_month_first = today.replace(year=hoy.year + 1, month=1, day=1)
+    else:
+        next_month_first = hoy.replace(month=hoy.month + 1, day=1)
+
+    try:
+        resp_count = requests.get(
+            f"{rest_url}/slots",
+            headers=headers,
+            params={
+                "select": "fecha",
+                "reservado_por": f"eq.{user_id}",
+                "fecha": f"gte.{first_day.isoformat()}",
+                "fecha2": f"lt.{next_month_first.isoformat()}",  # truco: filtramos en código
+            },
+            timeout=10,
+        )
+        reservas_usuario = resp_count.json() if resp_count.status_code == 200 else []
+    except Exception as e:
+        st.error("No se ha podido comprobar el número de reservas del mes.")
+        st.code(str(e))
+        reservas_usuario = []
+
+    # Filtro de fechas en código, porque hemos metido fecha2 arriba solo para que pase el param
+    reservas_mes = [
+        r for r in reservas_usuario
+        if first_day <= date.fromisoformat(r["fecha"]) < next_month_first
+    ]
+    usadas_mes = len(reservas_mes)
+
+    st.write(f"Franjas reservadas este mes: **{usadas_mes} / 10**")
+    if usadas_mes >= 10:
+        st.warning("Has llegado al máximo de 10 franjas este mes. No puedes hacer más reservas.")
+        return
+
+    # ---------------------------
+    # 2) Construir semana actual (lunes-viernes)
+    # ---------------------------
+    hoy = date.today()
+    lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
+    dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
+    fin_semana = dias_semana[-1]
+
+    # ---------------------------
+    # 3) Leer todos los slots de esa semana
+    # ---------------------------
+    try:
+        resp = requests.get(
+            f"{rest_url}/slots",
+            headers=headers,
+            params={
+                "select": "fecha,franja,owner_usa,reservado_por,plaza_id",
+                "fecha": f"gte.{lunes.isoformat()}",
+                "fecha2": f"lte.{fin_semana.isoformat()}",
+            },
+            timeout=10,
+        )
+        datos = resp.json() if resp.status_code == 200 else []
+    except Exception as e:
+        st.error("No se ha podido leer la disponibilidad de esta semana.")
+        st.code(str(e))
+        datos = []
+
+    # Agrupamos por (fecha, franja): cuántas plazas cedidas libres hay
+    from collections import defaultdict
+
+    disponibles = defaultdict(int)
+
+    for fila in datos:
+        try:
+            f = date.fromisoformat(fila["fecha"])
+        except Exception:
+            continue
+
+        franja = fila["franja"]
+        owner_usa = fila["owner_usa"]
+        reservado_por = fila["reservado_por"]
+
+        # Hay hueco disponible si el titular NO usa la plaza y nadie la ha reservado
+        if owner_usa is False and reservado_por is None:
+            disponibles[(f, franja)] += 1
+
+    st.markdown("### Semana actual (plazas agregadas)")
+    st.markdown(
+        "_Verás la disponibilidad agregada de todas las plazas. "
+        "Puedes reservar cualquier día/franja de esta semana mientras haya hueco._"
+    )
+
+    # Cabecera de tabla
+    header_cols = st.columns(3)
+    header_cols[0].markdown("**Día**")
+    header_cols[1].markdown("**Mañana**")
+    header_cols[2].markdown("**Tarde**")
+
+    # Variable para saber qué botón ha pulsado
+    reserva_seleccionada = None
+
+    # Pintamos la semana
+    for d in dias_semana:
+        cols = st.columns(3)
+        cols[0].write(d.strftime("%a %d/%m"))
+
+        for idx, franja in enumerate(["M", "T"], start=1):
+            num_disponibles = disponibles.get((d, franja), 0)
+
+            if num_disponibles > 0:
+                # Hay al menos una plaza cedida y libre en esa franja
+                label = f"Reservar ({num_disponibles} disp.)"
+                key = f"res_{d.isoformat()}_{franja}"
+
+                if cols[idx].button(label, key=key):
+                    reserva_seleccionada = (d, franja)
+            else:
+                cols[idx].markdown("⬜️ _No disponible_")
+
+    # ---------------------------
+    # 4) Si el usuario ha pulsado un botón de reserva
+    # ---------------------------
+    if reserva_seleccionada is not None:
+        dia_reserva, franja_reserva = reserva_seleccionada
+
+        # Re-chequeo de franjas usadas (por si entre medias ha reservado en otra sesión)
+        if usadas_mes >= 10:
+            st.error("Ya has alcanzado el máximo de 10 franjas este mes.")
+            return
+
+        try:
+            # Buscar una plaza concreta cedida y libre
+            resp_libre = requests.get(
+                f"{rest_url}/slots",
+                headers=headers,
+                params={
+                    "select": "id,plaza_id",
+                    "fecha": f"eq.{dia_reserva.isoformat()}",
+                    "franja": f"eq.{franja_reserva}",
+                    "owner_usa": "eq.false",
+                    "reservado_por": "is.null",
+                    "order": "plaza_id.asc",
+                    "limit": "1",
+                },
+                timeout=10,
+            )
+            libres = resp_libre.json() if resp_libre.status_code == 200 else []
+
+            if not libres:
+                st.error("Lo siento, ya no queda hueco disponible en esa franja.")
+                return
+
+            slot = libres[0]
+            slot_id = slot["id"]
+            plaza_id = slot["plaza_id"]
+
+            # Actualizar ese slot para asignarlo al usuario
+            r_update = requests.patch(
+                f"{rest_url}/slots",
+                headers=headers,
+                params={"id": f"eq.{slot_id}"},
+                json={"reservado_por": user_id, "estado": "RESERVADO"},
+                timeout=10,
+            )
+            r_update.raise_for_status()
+
+            st.success(
+                f"Reserva confirmada para {dia_reserva.strftime('%d/%m')} "
+                f"{'mañana' if franja_reserva=='M' else 'tarde'}. "
+                f"Plaza asignada: **P-{plaza_id}** ✅"
+            )
+
+        except Exception as e:
+            st.error("Ha ocurrido un error al intentar reservar la plaza.")
+            st.code(str(e))
 
 # ---------------------------------------------
 # MAIN
