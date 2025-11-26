@@ -471,6 +471,7 @@ def view_suplente(profile):
 
     from collections import defaultdict
     disponibles = defaultdict(int)
+    reservas_usuario = {}  # (fecha, franja) -> plaza_id
 
     for fila in datos:
         try:
@@ -486,6 +487,11 @@ def view_suplente(profile):
         franja = fila["franja"]
         owner_usa = fila["owner_usa"]
         reservado_por = fila["reservado_por"]
+        plaza_id = fila["plaza_id"]
+
+        # Si este slot está reservado por ESTE usuario, lo marcamos
+        if reservado_por == user_id:
+            reservas_usuario[(f, franja)] = plaza_id
 
         # Hay hueco si el titular NO usa la plaza y nadie la ha reservado
         if owner_usa is False and reservado_por is None:
@@ -511,6 +517,14 @@ def view_suplente(profile):
         cols[0].write(d.strftime("%a %d/%m"))
 
         for idx, franja in enumerate(["M", "T"], start=1):
+            # ¿Este usuario ya ha reservado esta franja?
+            if (d, franja) in reservas_usuario:
+                plaza_id = reservas_usuario[(d, franja)]
+                cols[idx].markdown(
+                    f"✅ Has reservado\n**P-{plaza_id}**"
+                )
+                continue
+
             num_disponibles = disponibles.get((d, franja), 0)
 
             if num_disponibles > 0:
