@@ -440,6 +440,46 @@ def view_suplente(profile):
     st.write(f"Franjas reservadas este mes: **{usadas_mes} / 10**")
 
     # ---------------------------
+    # 1.b) Próximas reservas (desde hoy en adelante)
+    # ---------------------------
+    try:
+        resp_upcoming = requests.get(
+            f"{rest_url}/slots",
+            headers=headers,
+            params={
+                "select": "fecha,franja,plaza_id",
+                "reservado_por": f"eq.{user_id}",
+                "fecha": f"gte.{hoy.isoformat()}",
+                "order": "fecha.asc,franja.asc",
+            },
+            timeout=10,
+        )
+        upcoming_raw = resp_upcoming.json() if resp_upcoming.status_code == 200 else []
+    except Exception as e:
+        st.error("No se han podido cargar tus próximas reservas.")
+        st.code(str(e))
+        upcoming_raw = []
+
+    proximas = []
+    for r in upcoming_raw:
+        try:
+            fecha_str = r["fecha"][:10]
+            f = date.fromisoformat(fecha_str)
+            franja_txt = "Mañana" if r["franja"] == "M" else "Tarde"
+            plaza_id = r["plaza_id"]
+            proximas.append(
+                f"- {f.strftime('%a %d/%m')} – {franja_txt} – Plaza **P-{plaza_id}**"
+            )
+        except Exception:
+            continue
+
+    st.markdown("### 🔜 Tus próximas reservas")
+    if proximas:
+        st.markdown("\n".join(proximas))
+    else:
+        st.markdown("_No tienes reservas futuras._")
+
+    # ---------------------------
     # 2) Construir semana actual (lunes-viernes)
     # ---------------------------
     lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
