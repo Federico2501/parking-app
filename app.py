@@ -3,7 +3,11 @@ import requests
 import pandas as pd
 from datetime import date, timedelta, datetime
 
-st.set_page_config(page_title="Parking empresa", page_icon="🅿️")
+st.set_page_config(
+    page_title="Parking GLS",
+    page_icon="Logo_GLS.png"
+)
+
 
 # ---------------------------------------------
 # Utilidades conexión Supabase
