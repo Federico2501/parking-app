@@ -92,12 +92,11 @@ def view_titular(profile):
     st.write(f"Tu plaza asignada: **P-{plaza_id}**")
     st.markdown("Marca qué franjas **cedes** tu plaza esta semana (lunes a viernes):")
 
-    # Calculamos la semana actual (lunes a viernes)
+    # Semana actual (lunes a viernes)
     hoy = date.today()
-    lunes = hoy - timedelta(days=hoy.weekday())  # weekday(): 0 = lunes
+    lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
     dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
 
-    # Obtenemos info de Supabase
     rest_url, headers, _ = get_rest_info()
 
     # Leer todos los slots de esta plaza
@@ -121,12 +120,13 @@ def view_titular(profile):
     estado = {}
     for s in slots:
         try:
-            f = date.fromisoformat(s["fecha"])
+            # Cortamos a 'YYYY-MM-DD' por si viene con hora/zona
+            fecha_str = s["fecha"][:10]
+            f = date.fromisoformat(fecha_str)
             estado[(f, s["franja"])] = s["owner_usa"]
         except Exception:
             continue
 
-    # Construimos la tabla semanal: día vs mañana/tarde
     st.markdown("### Semana actual")
 
     header_cols = st.columns(3)
@@ -134,16 +134,13 @@ def view_titular(profile):
     header_cols[1].markdown("**Mañana**")
     header_cols[2].markdown("**Tarde**")
 
-    # Guardamos aquí la decisión de ceder / no por cada día/franja
     cedencias = {}
 
     for d in dias_semana:
         cols = st.columns(3)
-        # Columna día
         cols[0].write(d.strftime("%a %d/%m"))
 
         for idx, franja in enumerate(["M", "T"], start=1):
-            # Por defecto, si no hay registro, el titular USA la plaza
             owner_usa = estado.get((d, franja), True)
             cedida_por_defecto = not owner_usa  # si no la usa, es que la cedió
 
@@ -158,7 +155,6 @@ def view_titular(profile):
     st.markdown("---")
     if st.button("Guardar cambios de la semana"):
         try:
-            # Para cada día/franja, hacemos upsert del slot
             for (d, franja), cedida in cedencias.items():
                 owner_usa = not cedida  # si la cedo, yo no la uso
 
@@ -167,8 +163,7 @@ def view_titular(profile):
                     "plaza_id": plaza_id,
                     "franja": franja,
                     "owner_usa": owner_usa,
-                    # si el titular vuelve a usarla, nos cargamos cualquier reserva anterior
-                    "reservado_por": None if owner_usa else None,
+                    "reservado_por": None,  # si cambia de opinión, liberamos cualquier reserva
                     "estado": "CONFIRMADO",
                 }]
 
@@ -191,11 +186,10 @@ def view_titular(profile):
 def view_suplente(profile):
     st.subheader("Panel SUPLENTE")
 
-    # Info básica de usuario
     nombre = profile.get("nombre")
     st.write(f"Nombre: {nombre}")
 
-    # Obtenemos el user_id desde la sesión de Auth
+    # user_id viene de la sesión de Auth
     auth = st.session_state.get("auth")
     if not auth:
         st.error("No se ha podido obtener la información de usuario (auth).")
@@ -205,15 +199,15 @@ def view_suplente(profile):
     rest_url, headers, _ = get_rest_info()
 
     # ---------------------------
-    # 1) Comprobar franjas usadas este mes (máx 10)
+    # 1) Franjas usadas este mes (máx 10)
     # ---------------------------
     hoy = date.today()
     first_day = hoy.replace(day=1)
     # primer día del mes siguiente
     if hoy.month == 12:
-        next_month_first = today.replace(year=hoy.year + 1, month=1, day=1)
+        next_month_first = date(hoy.year + 1, 1, 1)
     else:
-        next_month_first = hoy.replace(month=hoy.month + 1, day=1)
+        next_month_first = date(hoy.year, hoy.month + 1, 1)
 
     try:
         resp_count = requests.get(
@@ -223,7 +217,6 @@ def view_suplente(profile):
                 "select": "fecha",
                 "reservado_por": f"eq.{user_id}",
                 "fecha": f"gte.{first_day.isoformat()}",
-                "fecha2": f"lt.{next_month_first.isoformat()}",  # truco: filtramos en código
             },
             timeout=10,
         )
@@ -233,14 +226,20 @@ def view_suplente(profile):
         st.code(str(e))
         reservas_usuario = []
 
-    # Filtro de fechas en código, porque hemos metido fecha2 arriba solo para que pase el param
-    reservas_mes = [
-        r for r in reservas_usuario
-        if first_day <= date.fromisoformat(r["fecha"]) < next_month_first
-    ]
-    usadas_mes = len(reservas_mes)
+    # Filtramos en código hasta el primer día del mes siguiente
+    reservas_mes = []
+    for r in reservas_usuario:
+        try:
+            fecha_str = r["fecha"][:10]
+            f = date.fromisoformat(fecha_str)
+            if first_day <= f < next_month_first:
+                reservas_mes.append(r)
+        except Exception:
+            continue
 
+    usadas_mes = len(reservas_mes)
     st.write(f"Franjas reservadas este mes: **{usadas_mes} / 10**")
+
     if usadas_mes >= 10:
         st.warning("Has llegado al máximo de 10 franjas este mes. No puedes hacer más reservas.")
         return
@@ -248,7 +247,6 @@ def view_suplente(profile):
     # ---------------------------
     # 2) Construir semana actual (lunes-viernes)
     # ---------------------------
-    hoy = date.today()
     lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
     dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
     fin_semana = dias_semana[-1]
@@ -263,7 +261,6 @@ def view_suplente(profile):
             params={
                 "select": "fecha,franja,owner_usa,reservado_por,plaza_id",
                 "fecha": f"gte.{lunes.isoformat()}",
-                "fecha2": f"lte.{fin_semana.isoformat()}",
             },
             timeout=10,
         )
@@ -273,22 +270,25 @@ def view_suplente(profile):
         st.code(str(e))
         datos = []
 
-    # Agrupamos por (fecha, franja): cuántas plazas cedidas libres hay
     from collections import defaultdict
-
     disponibles = defaultdict(int)
 
     for fila in datos:
         try:
-            f = date.fromisoformat(fila["fecha"])
+            fecha_str = fila["fecha"][:10]  # cortamos por si viene con hora/zona
+            f = date.fromisoformat(fecha_str)
         except Exception:
+            continue
+
+        # Nos quedamos solo con esta semana (por si hay más adelante)
+        if not (lunes <= f <= fin_semana):
             continue
 
         franja = fila["franja"]
         owner_usa = fila["owner_usa"]
         reservado_por = fila["reservado_por"]
 
-        # Hay hueco disponible si el titular NO usa la plaza y nadie la ha reservado
+        # Hay hueco si el titular NO usa la plaza y nadie la ha reservado
         if owner_usa is False and reservado_por is None:
             disponibles[(f, franja)] += 1
 
@@ -298,13 +298,12 @@ def view_suplente(profile):
         "Puedes reservar cualquier día/franja de esta semana mientras haya hueco._"
     )
 
-    # Cabecera de tabla
+    # Cabecera
     header_cols = st.columns(3)
     header_cols[0].markdown("**Día**")
     header_cols[1].markdown("**Mañana**")
     header_cols[2].markdown("**Tarde**")
 
-    # Variable para saber qué botón ha pulsado
     reserva_seleccionada = None
 
     # Pintamos la semana
@@ -316,7 +315,6 @@ def view_suplente(profile):
             num_disponibles = disponibles.get((d, franja), 0)
 
             if num_disponibles > 0:
-                # Hay al menos una plaza cedida y libre en esa franja
                 label = f"Reservar ({num_disponibles} disp.)"
                 key = f"res_{d.isoformat()}_{franja}"
 
@@ -326,12 +324,12 @@ def view_suplente(profile):
                 cols[idx].markdown("⬜️ _No disponible_")
 
     # ---------------------------
-    # 4) Si el usuario ha pulsado un botón de reserva
+    # 4) Si el usuario pulsa un botón de reserva
     # ---------------------------
     if reserva_seleccionada is not None:
         dia_reserva, franja_reserva = reserva_seleccionada
 
-        # Re-chequeo de franjas usadas (por si entre medias ha reservado en otra sesión)
+        # Re-chequeo rápido por si se ha llenado en medio (opcional)
         if usadas_mes >= 10:
             st.error("Ya has alcanzado el máximo de 10 franjas este mes.")
             return
@@ -362,7 +360,7 @@ def view_suplente(profile):
             slot_id = slot["id"]
             plaza_id = slot["plaza_id"]
 
-            # Actualizar ese slot para asignarlo al usuario
+            # Asignar la plaza al usuario
             r_update = requests.patch(
                 f"{rest_url}/slots",
                 headers=headers,
