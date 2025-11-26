@@ -370,9 +370,8 @@ def view_suplente(profile):
                 "fecha": dia_reserva.isoformat(),
                 "plaza_id": plaza_id,
                 "franja": franja_reserva,
-                "owner_usa": False,
-                "reservado_por": user_id,
-                "estado": "RESERVADO",
+               "owner_usa": False,       # sigue siendo cesión del titular
+                "reservado_por": user_id, # asignada a este suplente
             }]
 
             local_headers = headers.copy()
