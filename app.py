@@ -70,13 +70,146 @@ def load_profile(user_id):
 # ---------------------------------------------
 def view_admin(profile):
     st.subheader("Panel ADMIN")
+
     st.write(f"Nombre: {profile.get('nombre')}")
-    st.write("Desde aquí más adelante podrás:")
-    st.markdown("""
-    - Gestionar usuarios y roles
-    - Ver estadísticas de uso del parking
-    - Forzar cancelaciones, etc.
-    """)
+
+    rest_url, headers, _ = get_rest_info()
+
+    # ---------------------------
+    # 1) Cargar todos los usuarios
+    # ---------------------------
+    try:
+        resp_users = requests.get(
+            f"{rest_url}/app_users",
+            headers=headers,
+            params={"select": "id,nombre,rol,plaza_id"},
+            timeout=10,
+        )
+        resp_users.raise_for_status()
+        usuarios = resp_users.json()
+    except Exception as e:
+        st.error("No se han podido cargar los usuarios.")
+        st.code(str(e))
+        return
+
+    # Mapas útiles
+    id_to_nombre = {u["id"]: u["nombre"] for u in usuarios}
+    plaza_to_titular = {
+        u["plaza_id"]: u["nombre"]
+        for u in usuarios
+        if u.get("rol") == "TITULAR" and u.get("plaza_id") is not None
+    }
+
+    # Contadores
+    n_titulares = sum(1 for u in usuarios if u.get("rol") == "TITULAR")
+    n_suplentes = sum(1 for u in usuarios if u.get("rol") == "SUPLENTE")
+    n_admins    = sum(1 for u in usuarios if u.get("rol") == "ADMIN")
+    plazas_totales = len({u["plaza_id"] for u in usuarios if u.get("rol") == "TITULAR" and u.get("plaza_id") is not None})
+
+    st.markdown("### Resumen de usuarios / plazas")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Titulares", n_titulares)
+    c2.metric("Suplentes", n_suplentes)
+    c3.metric("Admins", n_admins)
+    c4.metric("Plazas asignadas", plazas_totales)
+
+    # ---------------------------
+    # 2) Semana actual (lunes-viernes)
+    # ---------------------------
+    hoy = date.today()
+    lunes = hoy - timedelta(days=hoy.weekday())
+    dias_semana = [lunes + timedelta(days=i) for i in range(5)]
+    fin_semana = dias_semana[-1]
+
+    # Cargar slots de esta semana (de todas las plazas)
+    try:
+        resp_slots = requests.get(
+            f"{rest_url}/slots",
+            headers=headers,
+            params={
+                "select": "fecha,franja,plaza_id,owner_usa,reservado_por",
+                "fecha": f"gte.{lunes.isoformat()}",
+            },
+            timeout=10,
+        )
+        resp_slots.raise_for_status()
+        slots_raw = resp_slots.json()
+    except Exception as e:
+        st.error("No se han podido cargar los slots de esta semana.")
+        st.code(str(e))
+        return
+
+    # Normalizamos y filtramos solo la semana (por si hay más fechas)
+    slots = []
+    for s in slots_raw:
+        try:
+            fecha_str = s["fecha"][:10]
+            f = date.fromisoformat(fecha_str)
+        except Exception:
+            continue
+        if not (lunes <= f <= fin_semana):
+            continue
+        slots.append({
+            "fecha": f,
+            "franja": s["franja"],
+            "plaza_id": s["plaza_id"],
+            "owner_usa": s["owner_usa"],
+            "reservado_por": s["reservado_por"],
+        })
+
+    # KPIs de la semana
+    cedidos = [s for s in slots if s["owner_usa"] is False]
+    reservados = [s for s in cedidos if s["reservado_por"] is not None]
+    libres = [s for s in cedidos if s["reservado_por"] is None]
+
+    st.markdown("### Semana actual (lu–vi)")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Franjas cedidas", len(cedidos))
+    c2.metric("Cedidas y reservadas", len(reservados))
+    c3.metric("Cedidas libres", len(libres))
+
+    # ---------------------------
+    # 3) Tabla detalle de la semana
+    # ---------------------------
+    filas = []
+    for s in sorted(slots, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
+        fecha = s["fecha"]
+        franja = "Mañana" if s["franja"] == "M" else "Tarde"
+        plaza_id = s["plaza_id"]
+        owner_usa = s["owner_usa"]
+        reservado_por = s["reservado_por"]
+
+        titular = plaza_to_titular.get(plaza_id, "-")
+        suplente = id_to_nombre.get(reservado_por, "-") if reservado_por else "-"
+
+        if owner_usa and not reservado_por:
+            estado = "Titular usa"
+        elif not owner_usa and reservado_por is None:
+            estado = "Cedido (libre)"
+        elif not owner_usa and reservado_por is not None:
+            estado = f"Cedido y reservado por {suplente}"
+        else:
+            # Caso raro, por si en BBDD hay algo inconsistente
+            estado = "Inconsistente"
+
+        filas.append({
+            "Fecha": fecha.strftime("%d/%m/%Y"),
+            "Franja": franja,
+            "Plaza": f"P-{plaza_id}",
+            "Titular": titular,
+            "Suplente": suplente,
+            "Estado": estado,
+        })
+
+    st.markdown("### Detalle de slots semana actual")
+
+    if filas:
+        df = pd.DataFrame(filas)
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No hay slots registrados para esta semana.")
 
 def view_titular(profile):
     st.subheader("Panel TITULAR")
