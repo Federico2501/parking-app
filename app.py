@@ -335,7 +335,7 @@ def view_suplente(profile):
             return
 
        try:
-            # 1) Buscar una plaza concreta cedida y libre
+            # 1) Buscar plaza cedida y libre
             resp_libre = requests.get(
                 f"{rest_url}/slots",
                 headers=headers,
@@ -364,13 +364,13 @@ def view_suplente(profile):
             slot = libres[0]
             plaza_id = slot["plaza_id"]
 
-            # 2) Upsert del slot: misma fecha/plaza/franja pero con reservado_por = usuario
+            # 2) Upsert del slot para reservarlo
             payload = [{
                 "fecha": dia_reserva.isoformat(),
                 "plaza_id": plaza_id,
                 "franja": franja_reserva,
-                "owner_usa": False,          # sigue siendo cesión del titular
-                "reservado_por": user_id,    # ahora asignada a este suplente
+                "owner_usa": False,
+                "reservado_por": user_id,
                 "estado": "RESERVADO",
             }]
 
@@ -386,7 +386,7 @@ def view_suplente(profile):
 
             if r_update.status_code >= 400:
                 st.error("Supabase ha devuelto un error al guardar la reserva:")
-                st.code(r_update.text)  # ← aquí veremos el mensaje REAL de Postgres/PostgREST
+                st.code(r_update.text)   # ← AQUÍ VEREMOS EL MENSAJE REAL
                 return
 
             st.success(
