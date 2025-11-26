@@ -213,7 +213,7 @@ def view_admin(profile):
             faltan = 2 - total_registradas
             stats["ocupadas"] += faltan
 
-    # Grid 10x10 = 100 casillas
+    # Grid 5x10 = 50 casillas
     rows = 5
     cols = 10
 
@@ -286,7 +286,50 @@ def view_admin(profile):
 
     if filas:
         df = pd.DataFrame(filas)
-        st.dataframe(df, use_container_width=True)
+
+        # ---- Filtros ----
+        c1, c2, c3 = st.columns(3)
+
+        # Filtro por fecha
+        try:
+            unique_fechas = sorted(
+                df["Fecha"].unique(),
+                key=lambda s: datetime.strptime(s, "%d/%m/%Y")
+            )
+        except Exception:
+            unique_fechas = sorted(df["Fecha"].unique())
+
+        sel_fechas = c1.multiselect(
+            "Fecha",
+            options=unique_fechas,
+            default=unique_fechas,
+        )
+
+        # Filtro por plaza
+        unique_plazas = sorted(df["Plaza"].unique())
+        sel_plazas = c2.multiselect(
+            "Plaza",
+            options=unique_plazas,
+            default=unique_plazas,
+        )
+
+        # Filtro por turno/franja
+        unique_franjas = sorted(df["Franja"].unique())
+        sel_franjas = c3.multiselect(
+            "Turno",
+            options=unique_franjas,
+            default=unique_franjas,
+        )
+
+        # Aplicar filtros
+        df_filtrado = df[
+            df["Fecha"].isin(sel_fechas)
+            & df["Plaza"].isin(sel_plazas)
+            & df["Franja"].isin(sel_franjas)
+        ]
+
+        st.dataframe(df_filtrado, use_container_width=True)
+
     else:
         st.info("No hay slots registrados para esta semana.")
 
