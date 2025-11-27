@@ -461,7 +461,8 @@ def view_titular(profile):
     # Semana actual (lunes a viernes)
     hoy = date.today()
     lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
-    dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
+    all_dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
+    dias_semana = [d for d in all_dias_semana if d >= hoy]
 
     rest_url, headers, _ = get_rest_info()
 
@@ -684,11 +685,15 @@ def view_suplente(profile):
         st.markdown("_No tienes reservas futuras._")
 
     # ---------------------------
-    # 2) Construir semana actual (lunes-viernes)
+    # 2) Construir semana actual (solo hoy y días futuros de la semana)
     # ---------------------------
+    
     lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
-    dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
-    fin_semana = dias_semana[-1]
+    all_dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
+    dias_semana = [d for d in all_dias_semana if d >= hoy]
+
+    # último día que mostraremos (para filtrar datos)
+    fin_semana = dias_semana[-1] if dias_semana else hoy
 
     # ---------------------------
     # 3) Leer todos los slots de esa semana
@@ -720,8 +725,8 @@ def view_suplente(profile):
         except Exception:
             continue
 
-        # Nos quedamos solo con esta semana (por si hay más adelante)
-        if not (lunes <= f <= fin_semana):
+        # Nos quedamos solo HOY y dias futuros de esta semana
+        if not (hoy <= f <= fin_semana):
             continue
 
         franja = fila["franja"]
