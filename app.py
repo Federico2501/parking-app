@@ -1009,7 +1009,14 @@ def view_titular(profile):
                 texto_T = "Titular usa" if owner_usa_T else "Cedida (libre)"
                 col_t.markdown(texto_T)
                 cedida_T = not owner_usa_T
-
+             
+                # Columna día completo solo informativa
+                if cedida_M and cedida_T:
+                    col_full.markdown("✅ Día completo cedido")
+                elif cedida_M or cedida_T:
+                    col_full.markdown("Parcialmente cedido")
+                else:
+                    col_full.markdown("—")
 
         # Caso 2: editable y SIN reservas de suplente en ninguna franja → permitimos checkbox de día completo
         elif reservado_M is None and reservado_T is None:
