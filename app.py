@@ -725,6 +725,27 @@ def view_admin(profile):
     else:
         st.info("No hay slots registrados para esta semana.")
 
+    # ---------------------------
+    # 5) Bloque de sorteo (ADMIN)
+    # ---------------------------
+    st.markdown("---")
+    st.markdown("### 🎲 Sorteo de plazas (ADMIN)")
+
+    fecha_por_defecto = hoy + timedelta(days=1)
+    fecha_sorteo = st.date_input(
+        "Fecha del sorteo (normalmente mañana)",
+        value=fecha_por_defecto,
+        min_value=hoy,
+    )
+
+    col_sorteo, col_cancel = st.columns(2)
+
+    if col_sorteo.button("Ejecutar sorteo para la fecha seleccionada"):
+        ejecutar_sorteo(fecha_sorteo)
+
+    if col_cancel.button("Cancelar sorteo de la fecha seleccionada"):
+        cancelar_sorteo(fecha_sorteo)
+
 def view_titular(profile):
     st.subheader("Panel TITULAR")
 
