@@ -864,12 +864,12 @@ def view_admin(profile):
     # ---------- BOTÓN 1: EJECUTAR SORTEO ----------
     if col_sorteo.button("Ejecutar sorteo para esta fecha"):
         try:
-            # 1) Cargar pre_reservas PENDIENTES para esa fecha
+            # 1) Cargar pre_reservas PENDIENTES para esa fecha (incluyendo pack_id)
             resp_pre = requests.get(
                 f"{rest_url}/pre_reservas",
                 headers=headers,
                 params={
-                    "select": "id,usuario_id,franja",
+                    "select": "id,usuario_id,franja,pack_id",
                     "fecha": f"eq.{fecha_sorteo.isoformat()}",
                     "estado": "eq.PENDIENTE",
                 },
@@ -916,12 +916,12 @@ def view_admin(profile):
                 except Exception:
                     continue
 
-            # 3) Cargar slots cedidos para ese día
+            # 3) Cargar slots cedidos para ese día → plazas libres por franja
             resp_slots_dia = requests.get(
                 f"{rest_url}/slots",
                 headers=headers,
                 params={
-                    "select": "fecha,franja,plaza_id,owner_usa,reservado_por",
+                    "select": "franja,plaza_id,owner_usa,reservado_por",
                     "fecha": f"eq.{fecha_sorteo.isoformat()}",
                 },
                 timeout=15,
@@ -940,59 +940,79 @@ def view_admin(profile):
                 if s_d["owner_usa"] is False and s_d["reservado_por"] is None:
                     libres_por_franja[s_d["franja"]].append(s_d["plaza_id"])
 
+            # 4) Construir PACKS:
+            #    - filas sin pack_id → packs de 1 franja
+            #    - filas con mismo pack_id → pack de varias franjas (por ej. M+T)
+            packs = []
+            tmp_by_pack = {}
+
+            for pre in pre_pendientes:
+                pk = pre.get("pack_id")
+                if pk is None:
+                    # solicitud simple (una franja)
+                    packs.append(
+                        {
+                            "usuario_id": pre["usuario_id"],
+                            "franjas": [pre["franja"]],
+                            "pre_ids": [pre["id"]],
+                        }
+                    )
+                else:
+                    if pk not in tmp_by_pack:
+                        tmp_by_pack[pk] = {
+                            "usuario_id": pre["usuario_id"],
+                            "franjas": [],
+                            "pre_ids": [],
+                        }
+                    tmp_by_pack[pk]["franjas"].append(pre["franja"])
+                    tmp_by_pack[pk]["pre_ids"].append(pre["id"])
+
+            packs.extend(tmp_by_pack.values())
+
+            # 5) Ordenar packs por justicia: menos usos primero
+            def clave_orden(p):
+                u = p["usuario_id"]
+                return (usos_mes.get(u, 0), random.random())
+
+            packs_ordenados = sorted(packs, key=clave_orden)
+
             total_asignados = 0
             total_rechazados = 0
 
-            # 4) Sorteo por franja (M / T)
-            for franja in ["M", "T"]:
-                candidatos = [p for p in pre_pendientes if p["franja"] == franja]
-                if not candidatos:
-                    continue
+            # 6) Procesar cada pack (todo-o-nada)
+            for pack in packs_ordenados:
+                usuario_id = pack["usuario_id"]
+                franjas_pack = sorted(set(pack["franjas"]))  # p.ej. ["M"] o ["M","T"]
+                pre_ids = pack["pre_ids"]
 
-                plazas_libres = libres_por_franja.get(franja, [])
-                if not plazas_libres:
-                    # No hay plazas → todos rechazados
-                    for pre in candidatos:
+                # ¿Hay plaza libre en TODAS las franjas del pack?
+                se_puede_asignar = True
+                for fr in franjas_pack:
+                    if not libres_por_franja.get(fr):
+                        se_puede_asignar = False
+                        break
+
+                if not se_puede_asignar:
+                    # No se puede asignar este pack → RECHAZAMOS todas sus pre_reservas
+                    for pre_id in pre_ids:
                         r_rej = requests.patch(
                             f"{rest_url}/pre_reservas",
                             headers=headers,
-                            params={"id": f"eq.{pre['id']}"},
+                            params={"id": f"eq.{pre_id}"},
                             json={"estado": "RECHAZADO"},
                             timeout=10,
                         )
-                        total_rechazados += 1
+                    total_rechazados += len(pre_ids)
                     continue
 
-                # Ordenar candidatos: menos usos primero, empate → random
-                def orden(pre):
-                    u = pre["usuario_id"]
-                    return (usos_mes.get(u, 0), random.random())
+                # Sí se puede: asignamos una plaza en cada franja del pack
+                for fr in franjas_pack:
+                    plaza_id = libres_por_franja[fr].pop(0)
 
-                candidatos_ordenados = sorted(candidatos, key=orden)
-
-                for pre in candidatos_ordenados:
-                    if not plazas_libres:
-                        # Sin plazas → rechazado
-                        r_rej = requests.patch(
-                            f"{rest_url}/pre_reservas",
-                            headers=headers,
-                            params={"id": f"eq.{pre['id']}"},
-                            json={"estado": "RECHAZADO"},
-                            timeout=10,
-                        )
-                        total_rechazados += 1
-                        continue
-
-                    plaza_id = plazas_libres.pop(0)
-                    usuario_id = pre["usuario_id"]
-
-                    usos_mes[usuario_id] = usos_mes.get(usuario_id, 0) + 1
-
-                    # a) Upsert en slots
                     payload_slot = [{
                         "fecha": fecha_sorteo.isoformat(),
                         "plaza_id": plaza_id,
-                        "franja": franja,
+                        "franja": fr,
                         "owner_usa": False,
                         "reservado_por": usuario_id,
                         "estado": "CONFIRMADO",
@@ -1011,11 +1031,12 @@ def view_admin(profile):
                         st.code(r_slot.text)
                         return
 
-                    # b) Marcar pre_reserva como ASIGNADO
+                # Marcar todas las pre_reservas del pack como ASIGNADO
+                for pre_id in pre_ids:
                     r_asig = requests.patch(
                         f"{rest_url}/pre_reservas",
                         headers=headers,
-                        params={"id": f"eq.{pre['id']}"},
+                        params={"id": f"eq.{pre_id}"},
                         json={"estado": "ASIGNADO"},
                         timeout=10,
                     )
@@ -1024,11 +1045,12 @@ def view_admin(profile):
                         st.code(r_asig.text)
                         return
 
-                    total_asignados += 1
+                usos_mes[usuario_id] = usos_mes.get(usuario_id, 0) + len(franjas_pack)
+                total_asignados += len(franjas_pack)
 
             st.success(
                 f"Sorteo completado para {fecha_sorteo.strftime('%d/%m/%Y')}. "
-                f"Asignados: {total_asignados} · Rechazados: {total_rechazados}."
+                f"Franjas asignadas: {total_asignados} · Pre-reservas rechazadas: {total_rechazados}."
             )
             st.info(
                 "Los suplentes verán ahora sus plazas asignadas o las solicitudes no aprobadas "
