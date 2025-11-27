@@ -946,7 +946,7 @@ def view_suplente(profile):
     # ---------------------------
     # 1) Próximas reservas / solicitudes (desde hoy en adelante)
     #    - Reservas firmes -> slots
-    #    - Solicitudes pendientes -> pre_reservas PENDIENTE
+    #    - Solicitudes -> pre_reservas (PENDIENTE / RECHAZADO)
     # ---------------------------
 
     # a) Reservas firmes (slots)
@@ -968,9 +968,35 @@ def view_suplente(profile):
         st.code(str(e))
         upcoming_slots = []
 
-    # b) Solicitudes pendientes (pre_reservas)
+    proximas = []
+
+    # ① Reservas firmes (slots)
+    for r in upcoming_slots:
+        try:
+            fecha_str = r["fecha"][:10]
+            f = date.fromisoformat(fecha_str)
+            franja = r["franja"]
+            franja_txt = "Mañana" if franja == "M" else "Tarde"
+            plaza_id = r["plaza_id"]
+
+            if f == hoy:
+                linea = (
+                    f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
+                    f"Plaza **P-{plaza_id}**"
+                )
+            else:
+                linea = (
+                    f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
+                    f"Plaza **P-{plaza_id}** (adjudicada)"
+                )
+
+            proximas.append((f, franja, linea))
+        except Exception:
+            continue
+
+    # ② Pre-reservas futuras (PENDIENTE / RECHAZADO)
     try:
-        resp_pre = requests.get(
+        resp_pre2 = requests.get(
             f"{rest_url}/pre_reservas",
             headers=headers,
             params={
@@ -980,72 +1006,48 @@ def view_suplente(profile):
             },
             timeout=10,
         )
-        pre_rows = resp_pre.json() if resp_pre.status_code == 200 else []
+        pre_fut = resp_pre2.json() if resp_pre2.status_code == 200 else []
     except Exception as e:
-        st.error("No se han podido cargar tus pre-reservas.")
+        st.error("No se han podido cargar tus pre-reservas futuras.")
         st.code(str(e))
-        pre_rows = []
+        pre_fut = []
 
-    proximas_lineas = []
-
-    # Procesar reservas firmes (slots)
-    for r in upcoming_slots:
+    for pr in pre_fut:
         try:
-            fecha_str = r["fecha"][:10]
-            f = date.fromisoformat(fecha_str)
-            franja_txt = "Mañana" if r["franja"] == "M" else "Tarde"
-            plaza_id = r["plaza_id"]
-
-            linea = (
-                f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
-                f"Plaza **P-{plaza_id}**"
-            )
-            proximas_lineas.append(linea)
-        except Exception:
-            continue
-
-    # Procesar solicitudes pendientes (pre_reservas)
-    for pr in pre_rows:
-        try:
-            if pr["estado"] != "PENDIENTE":
+            estado = pr["estado"]
+            if estado not in ("PENDIENTE", "RECHAZADO"):
                 continue
+
             fecha_str = pr["fecha"][:10]
             f = date.fromisoformat(fecha_str)
-            franja_txt = "Mañana" if pr["franja"] == "M" else "Tarde"
+            franja = pr["franja"]
+            franja_txt = "Mañana" if franja == "M" else "Tarde"
 
-            linea = (
-                f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
-                "_Solicitud pendiente de plaza_"
-            )
-            proximas_lineas.append(linea)
+            if estado == "PENDIENTE":
+                linea = (
+                    f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
+                    "_Solicitud pendiente_"
+                )
+            else:  # RECHAZADO
+                linea = (
+                    f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
+                    "❌ _Solicitud no adjudicada_"
+                )
+
+            proximas.append((f, franja, linea))
         except Exception:
             continue
 
+    # Ordenar correctamente: fecha ASC, franja M antes que T
+    orden_franja = {"M": 0, "T": 1}
+    proximas_ordenadas = sorted(
+        proximas,
+        key=lambda x: (x[0], orden_franja.get(x[1], 99))
+    )
+
     st.markdown("### 🔜 Tus próximas reservas / solicitudes")
-    if proximas_lineas:
-        # Ordenamos por fecha y franja (mañana antes que tarde)
-        def ordenar_linea(linea: str):
-            try:
-                partes = linea.split("–")
-                # partes[0] = "- Fri 28/11 "  -> queremos "28/11"
-                fecha_txt = partes[0].replace("-", "").strip()  # "Fri 28/11"
-                fecha_str = fecha_txt.split()[-1]               # "28/11"
-                fecha_real = datetime.strptime(fecha_str, "%d/%m").replace(year=hoy.year)
-
-                franja_txt = partes[1].strip().lower()
-                if "mañana" in franja_txt:
-                    franja_val = 0
-                elif "tarde" in franja_txt:
-                    franja_val = 1
-                else:
-                    franja_val = 2
-
-                return (fecha_real, franja_val)
-            except Exception:
-                return (datetime.max, 99)
-
-        ordenadas = sorted(proximas_lineas, key=ordenar_linea)
-        st.markdown("\n".join(ordenadas))
+    if proximas_ordenadas:
+        st.markdown("\n".join([p[2] for p in proximas_ordenadas]))
     else:
         st.markdown("_No tienes reservas ni solicitudes futuras._")
 
@@ -1107,7 +1109,7 @@ def view_suplente(profile):
             disponibles[(f, franja)] += 1
 
     # ---------------------------
-    # 3.b) Leer pre_reservas del usuario para la semana (solicitudes)
+    # 3.b) Leer pre_reservas del usuario para la semana (solicitudes PENDIENTES)
     # ---------------------------
     solicitudes_pend = set()  # (fecha, franja) con pre_reserva PENDIENTE
 
