@@ -684,7 +684,29 @@ def view_suplente(profile):
 
     st.markdown("### 🔜 Tus próximas reservas / solicitudes")
     if proximas_lineas:
-        st.markdown("\n".join(sorted(proximas_lineas)))
+        # Ordenamos por fecha y franja (mañana antes que tarde)
+        def ordenar_linea(linea: str):
+            try:
+                partes = linea.split("–")
+                # partes[0] = "- Fri 28/11 "  -> queremos "28/11"
+                fecha_txt = partes[0].replace("-", "").strip()  # "Fri 28/11"
+                fecha_str = fecha_txt.split()[-1]               # "28/11"
+                fecha_real = datetime.strptime(fecha_str, "%d/%m").replace(year=hoy.year)
+
+                franja_txt = partes[1].strip().lower()
+                if "mañana" in franja_txt:
+                    franja_val = 0
+                elif "tarde" in franja_txt:
+                    franja_val = 1
+                else:
+                    franja_val = 2
+
+                return (fecha_real, franja_val)
+            except Exception:
+                return (datetime.max, 99)
+
+        ordenadas = sorted(proximas_lineas, key=ordenar_linea)
+        st.markdown("\n".join(ordenadas))
     else:
         st.markdown("_No tienes reservas ni solicitudes futuras._")
 
