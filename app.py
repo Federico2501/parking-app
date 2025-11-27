@@ -1,7 +1,8 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import date, timedelta, datetime
+import random
+from datetime import date, timedelta, datetime, time
 
 st.set_page_config(
     page_title="Parking GLS",
@@ -26,6 +27,38 @@ def get_rest_info():
     }
 
     return rest_url, headers, anon_key
+
+def se_puede_modificar_slot(fecha_slot: date, accion: str) -> bool:
+    """
+    Devuelve True si la acción está permitida según las reglas:
+    
+    accion = "reservar"  o  "cancelar"
+    Reglas:
+      - HOY:
+           * reservar: permitido siempre
+           * cancelar: NO permitido nunca
+      - MAÑANA:
+           * reservar/cancelar permitido solo antes de 20:00
+      - FECHAS POSTERIORES A MAÑANA:
+           * reservado/cancelado permitido siempre
+    """
+    hoy = date.today()
+    ahora = datetime.now().time()
+    limite = time(20, 0)
+
+    # --- HOY ---
+    if fecha_slot == hoy:
+        if accion == "reservar":
+            return True   # siempre permitido reservar hoy
+        elif accion == "cancelar":
+            return False  # prohibido cancelar hoy
+
+    # --- MAÑANA ---
+    if fecha_slot == hoy + timedelta(days=1):
+        return ahora < limite
+
+    # --- FUTURO (pasado mañana) ---
+    return True
 
 # ---------------------------------------------
 # LOGIN via SUPABASE AUTH
@@ -749,8 +782,24 @@ def view_suplente(profile):
     # ---------------------------
     # 4) Cancelar reserva (si ha pulsado 'Cancelar')
     # ---------------------------
+
     if cancel_seleccionada is not None:
         dia_cancel, franja_cancel, plaza_cancel = cancel_seleccionada
+
+        # ❶ Comprobamos si se permite cancelar según la fecha y la hora
+        if not se_puede_modificar_slot(dia_cancel, "cancelar"):
+            if dia_cancel == date.today():
+                st.error(
+                    "No puedes cancelar reservas para HOY. "
+                    "Si no vas a usar la plaza, avisa al titular por fuera de la app."
+                )
+            else:
+                st.error(
+                    "Ya no puedes cancelar esta reserva: "
+                    "las reservas para mañana quedan bloqueadas a partir de las 20:00."
+                )
+            return
+
         try:
             payload = [{
                 "fecha": dia_cancel.isoformat(),
@@ -793,7 +842,15 @@ def view_suplente(profile):
     if reserva_seleccionada is not None:
         dia_reserva, franja_reserva = reserva_seleccionada
 
-        # Re-chequeo por si ya llegó al límite (otra sesión abierta, etc.)
+        # ❶ Comprobamos si se permite reservar según la fecha y la hora
+        if not se_puede_modificar_slot(dia_reserva, "reservar"):
+            st.error(
+                "Ya no puedes reservar esta franja: "
+                "las reservas para mañana quedan bloqueadas a partir de las 20:00."
+            )
+            return
+
+        # ❷ Re-chequeo por si ya llegó al límite (otra sesión abierta, etc.)
         if usadas_mes >= 10:
             st.error("Ya has alcanzado el máximo de 10 franjas este mes.")
             return
