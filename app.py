@@ -862,7 +862,6 @@ def view_admin(profile):
 
     if col_cancel.button("Cancelar sorteo de la fecha seleccionada"):
         cancelar_sorteo(fecha_sorteo)
-
 def view_titular(profile):
     st.subheader("Panel TITULAR")
 
@@ -986,46 +985,38 @@ def view_titular(profile):
         reservado_M = reservas.get((d, "M"))
         reservado_T = reservas.get((d, "T"))
 
-        # Por defecto, asumimos lo que hay en BD
+        # Por defecto, cedida = no la usa el titular
         cedida_M = not owner_usa_M
         cedida_T = not owner_usa_T
 
-        # Caso 1: NO editable (hoy o mañana después de las 20:00)
+        # Caso 1: NO editable (HOY o mañana > 20:00)
         if not editable:
             # Mañana
             if reservado_M is not None:
                 col_m.markdown("✅ Cedida (reservada)")
                 cedida_M = True
             else:
-                texto_M = "Titular usa" if owner_usa_M else "Cedida (libre)"
+                texto_M = "Cedida (libre)" if cedida_M else "Titular usa"
                 col_m.markdown(texto_M)
-                cedida_M = not owner_usa_M
 
             # Tarde
             if reservado_T is not None:
                 col_t.markdown("✅ Cedida (reservada)")
                 cedida_T = True
             else:
-                texto_T = "Titular usa" if owner_usa_T else "Cedida (libre)"
+                texto_T = "Cedida (libre)" if cedida_T else "Titular usa"
                 col_t.markdown(texto_T)
-                cedida_T = not owner_usa_T
-             
-                # Columna día completo solo informativa
-                if cedida_M and cedida_T:
-                    col_full.markdown("✅ Día completo cedido")
-                elif cedida_M or cedida_T:
-                    col_full.markdown("Parcialmente cedido")
-                else:
-                    col_full.markdown("—")
 
-        # Caso 2: editable y SIN reservas de suplente en ninguna franja → permitimos checkbox de día completo
+            # Día completo solo como marcador vacío
+            col_full.markdown("—")
+
+        # Caso 2: editable y sin reservas → permitir checkbox día completo
         elif reservado_M is None and reservado_T is None:
-            # Valores por defecto para checkboxes
-            default_M = not owner_usa_M
-            default_T = not owner_usa_T
+            default_M = cedida_M
+            default_T = cedida_T
             default_full = default_M and default_T
 
-            # Checkbox de día completo (manda sobre M y T al guardar)
+            # Checkbox día completo
             full_checked = col_full.checkbox(
                 "Ceder día completo",
                 value=default_full,
@@ -1033,13 +1024,13 @@ def view_titular(profile):
             )
 
             if full_checked:
-                # Ocultamos los widgets de mañana y tarde y mostramos solo texto
+                # OCULTAR mañana / tarde
                 col_m.markdown("_Incluida en día completo_")
                 col_t.markdown("_Incluida en día completo_")
                 cedida_M = True
                 cedida_T = True
             else:
-                # Usamos los checkboxes individuales
+                # Mostrar los checkboxes individuales
                 cedida_M = col_m.checkbox(
                     "Cedo",
                     value=default_M,
@@ -1050,25 +1041,19 @@ def view_titular(profile):
                     value=default_T,
                     key=f"cede_{d.isoformat()}_T",
                 )
-                # Columna día completo solo informativa
-                if cedida_M and cedida_T:
-                    col_full.markdown("✅ Día completo cedido")
-                elif cedida_M or cedida_T:
-                    col_full.markdown("Parcialmente cedido")
-                else:
-                    col_full.markdown("—")
 
-        # Caso 3: editable pero hay reservas en alguna franja → sin checkbox de día completo
+        # Caso 3: editable pero hay reservas en alguna franja → sin checkbox día completo
         else:
+            col_full.markdown("—")
+
             # Mañana
             if reservado_M is not None:
                 col_m.markdown("✅ Cedida (reservada)")
                 cedida_M = True
             else:
-                default_M = not owner_usa_M
                 cedida_M = col_m.checkbox(
                     "Cedo",
-                    value=default_M,
+                    value=cedida_M,
                     key=f"cede_{d.isoformat()}_M",
                 )
 
@@ -1077,22 +1062,13 @@ def view_titular(profile):
                 col_t.markdown("✅ Cedida (reservada)")
                 cedida_T = True
             else:
-                default_T = not owner_usa_T
                 cedida_T = col_t.checkbox(
                     "Cedo",
-                    value=default_T,
+                    value=cedida_T,
                     key=f"cede_{d.isoformat()}_T",
                 )
 
-            # Columna día completo solo informativa
-            if cedida_M and cedida_T:
-                col_full.markdown("✅ Día completo cedido")
-            elif cedida_M or cedida_T:
-                col_full.markdown("Parcialmente cedido")
-            else:
-                col_full.markdown("—")
-
-        # Guardamos decisión para guardar luego
+        # Guardamos resultados para el guardado final
         cedencias[(d, "M")] = cedida_M
         cedencias[(d, "T")] = cedida_T
 
@@ -1129,6 +1105,7 @@ def view_titular(profile):
         except Exception as e:
             st.error("Error al guardar la disponibilidad.")
             st.code(str(e))
+
 
 def view_suplente(profile):
     st.subheader("Panel SUPLENTE")
