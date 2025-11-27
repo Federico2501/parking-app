@@ -1698,14 +1698,22 @@ def view_suplente(profile):
 
         # --- Columna Día completo ---
         col_full = cols[3]
-        if not puede_dia_completo:
+
+        # Caso 1: el usuario tiene ya las dos franjas reservadas → día completo adjudicado
+        if tiene_slot_M and tiene_slot_T:
+            col_full.markdown("🟩 Día completo adjudicado")
+
+        elif not puede_dia_completo:
             col_full.markdown("—")
+
         elif full_day_pendiente:
             if col_full.button("Quitar día completo", key=f"pack_off_{d.isoformat()}"):
                 quitar_pack_click = d
+
         elif puede_solicitar_pack:
             if col_full.button("Día completo", key=f"pack_on_{d.isoformat()}"):
                 activar_pack_click = d
+
         else:
             col_full.markdown("_Usando franjas sueltas_")
 
