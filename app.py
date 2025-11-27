@@ -1415,9 +1415,9 @@ def view_suplente(profile):
 
             if sin_reservas_ni_solicitudes and hay_disp_en_ambas:
                 if d == hoy:
-                    label_full = "Reservar día completo"
+                    label_full = "Día completo"
                 else:
-                    label_full = "Solicitar día completo"
+                    label_full = "Día completo"
 
                 key_full_btn = f"full_{d.isoformat()}"
                 if cols[3].button(label_full, key=key_full_btn):
