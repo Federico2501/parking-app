@@ -602,50 +602,10 @@ def view_suplente(profile):
 
     rest_url, headers, _ = get_rest_info()
 
-    # ---------------------------
-    # 1) Franjas usadas este mes (máx 10)
-    # ---------------------------
     hoy = date.today()
-    first_day = hoy.replace(day=1)
-    # primer día del mes siguiente
-    if hoy.month == 12:
-        next_month_first = date(hoy.year + 1, 1, 1)
-    else:
-        next_month_first = date(hoy.year, hoy.month + 1, 1)
-
-    try:
-        resp_count = requests.get(
-            f"{rest_url}/slots",
-            headers=headers,
-            params={
-                "select": "fecha",
-                "reservado_por": f"eq.{user_id}",
-                "fecha": f"gte.{first_day.isoformat()}",
-            },
-            timeout=10,
-        )
-        reservas_usuario_raw = resp_count.json() if resp_count.status_code == 200 else []
-    except Exception as e:
-        st.error("No se ha podido comprobar el número de reservas del mes.")
-        st.code(str(e))
-        reservas_usuario_raw = []
-
-    # Filtramos en código hasta el primer día del mes siguiente
-    reservas_mes = []
-    for r in reservas_usuario_raw:
-        try:
-            fecha_str = r["fecha"][:10]
-            f = date.fromisoformat(fecha_str)
-            if first_day <= f < next_month_first:
-                reservas_mes.append(r)
-        except Exception:
-            continue
-
-    usadas_mes = len(reservas_mes)
-    st.write(f"Franjas reservadas este mes: **{usadas_mes} / 10**")
 
     # ---------------------------
-    # 1.b) Próximas reservas (desde hoy en adelante)
+    # 1) Próximas reservas (desde hoy en adelante)
     # ---------------------------
     try:
         resp_upcoming = requests.get(
@@ -665,30 +625,30 @@ def view_suplente(profile):
         st.code(str(e))
         upcoming_raw = []
 
-proximas = []
-for r in upcoming_raw:
-    try:
-        fecha_str = r["fecha"][:10]
-        f = date.fromisoformat(fecha_str)
-        franja_txt = "Mañana" if r["franja"] == "M" else "Tarde"
-        plaza_id = r["plaza_id"]
+    proximas = []
+    for r in upcoming_raw:
+        try:
+            fecha_str = r["fecha"][:10]
+            f = date.fromisoformat(fecha_str)
+            franja_txt = "Mañana" if r["franja"] == "M" else "Tarde"
+            plaza_id = r["plaza_id"]
 
-        if f == hoy:
-            # Hoy sí mostramos la plaza concreta
-            linea = (
-                f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
-                f"Plaza **P-{plaza_id}**"
-            )
-        else:
-            # Futuro: solicitud pendiente, sin plaza aún para el usuario
-            linea = (
-                f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
-                "_Solicitud pendiente_"
-            )
+            if f == hoy:
+                # Hoy sí mostramos la plaza concreta
+                linea = (
+                    f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
+                    f"Plaza **P-{plaza_id}**"
+                )
+            else:
+                # Futuro: solicitud pendiente, sin plaza aún para el usuario
+                linea = (
+                    f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
+                    "_Solicitud pendiente de plaza_"
+                )
 
-        proximas.append(linea)
-    except Exception:
-        continue
+            proximas.append(linea)
+        except Exception:
+            continue
 
     st.markdown("### 🔜 Tus próximas reservas")
     if proximas:
@@ -699,7 +659,6 @@ for r in upcoming_raw:
     # ---------------------------
     # 2) Construir semana actual (solo hoy y días futuros de la semana)
     # ---------------------------
-    
     lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
     all_dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
     dias_semana = [d for d in all_dias_semana if d >= hoy]
@@ -737,7 +696,7 @@ for r in upcoming_raw:
         except Exception:
             continue
 
-        # Nos quedamos solo HOY y dias futuros de esta semana
+        # Nos quedamos solo con HOY y días futuros de esta semana
         if not (hoy <= f <= fin_semana):
             continue
 
@@ -770,35 +729,32 @@ for r in upcoming_raw:
     cancel_seleccionada = None
 
     # Pintamos la semana
-for d in dias_semana:
-    cols = st.columns(3)
-    cols[0].write(d.strftime("%a %d/%m"))
+    for d in dias_semana:
+        cols = st.columns(3)
+        cols[0].write(d.strftime("%a %d/%m"))
 
-    for idx, franja in enumerate(["M", "T"], start=1):
+        for idx, franja in enumerate(["M", "T"], start=1):
 
-        # ¿Este usuario ya ha reservado / solicitado esta franja?
-        if (d, franja) in reservas_usuario:
-            plaza_id = reservas_usuario[(d, franja)]
+            # ¿Este usuario ya ha reservado / solicitado esta franja?
+            if (d, franja) in reservas_usuario:
+                plaza_id = reservas_usuario[(d, franja)]
 
-            if d == hoy:
-                # HOY: reserva firme, con plaza concreta
-                cols[idx].markdown(
-                    f"✅ Has reservado\n**P-{plaza_id}**"
-                )
-            else:
-                # FUTURO: solicitud pendiente de sorteo, sin mostrar plaza
-                cols[idx].markdown(
-                    "✅ Has solicitado\n_Plaza_"
-                )
+                if d == hoy:
+                    # HOY: reserva firme, con plaza concreta
+                    cols[idx].markdown(
+                        f"✅ Has reservado\n**P-{plaza_id}**"
+                    )
+                else:
+                    # FUTURO: solicitud pendiente de sorteo, sin mostrar plaza
+                    cols[idx].markdown(
+                        "✅ Has solicitado\n_Plaza pendiente de sorteo_"
+                    )
 
-            if cols[idx].button("Cancelar", key=f"cancel_{d.isoformat()}_{franja}"):
-                cancel_seleccionada = (d, franja, plaza_id)
+                if cols[idx].button("Cancelar", key=f"cancel_{d.isoformat()}_{franja}"):
+                    cancel_seleccionada = (d, franja, plaza_id)
 
-            continue
+                continue
 
-
-        # aquí sigue tu lógica de "No disponible", botones de reservar, etc.
-            
             num_disponibles = disponibles.get((d, franja), 0)
 
             if num_disponibles > 0:
@@ -813,7 +769,6 @@ for d in dias_semana:
     # ---------------------------
     # 4) Cancelar reserva (si ha pulsado 'Cancelar')
     # ---------------------------
-
     if cancel_seleccionada is not None:
         dia_cancel, franja_cancel, plaza_cancel = cancel_seleccionada
 
@@ -881,11 +836,6 @@ for d in dias_semana:
             )
             return
 
-        # ❷ Re-chequeo por si ya llegó al límite (otra sesión abierta, etc.)
-        if usadas_mes >= 10:
-            st.error("Ya has alcanzado el máximo de 10 franjas este mes.")
-            return
-
         try:
             # Buscar una plaza concreta cedida y libre
             resp_libre = requests.get(
@@ -951,6 +901,7 @@ for d in dias_semana:
             st.error("Ha ocurrido un error al intentar reservar la plaza.")
             st.code(str(e))
             return
+
 
 # ---------------------------------------------
 # MAIN
