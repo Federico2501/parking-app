@@ -1959,6 +1959,42 @@ def view_suplente(profile):
             st.code(str(e))
             return
 
+    if quitar_pack_click is not None:
+        dia = quitar_pack_click
+        if not se_puede_modificar_slot(dia, "cancelar"):
+            st.error(
+                "Ya no puedes cancelar el día completo: "
+                "las solicitudes para mañana quedan bloqueadas a partir de las 20:00."
+            )
+            return
+        try:
+            r_pre_cancel = requests.patch(
+                f"{rest_url}/pre_reservas",
+                headers=headers,
+                params={
+                    "usuario_id": f"eq.{user_id}",
+                    "fecha": f"eq.{dia.isoformat()}",
+                    "franja": "in.(M,T)",
+                    "estado": "in.(PENDIENTE,ASIGNADO)",
+                },
+                json={"estado": "CANCELADO"},
+                timeout=10,
+            )
+            if r_pre_cancel.status_code >= 400:
+                st.error("Supabase ha devuelto un error al cancelar el día completo:")
+                st.code(r_pre_cancel.text)
+                return
+
+            st.success(
+                f"Día completo cancelado para {dia.strftime('%d/%m')}."
+            )
+            st.rerun()
+
+        except Exception as e:
+            st.error("Ha ocurrido un error al cancelar el día completo.")
+            st.code(str(e))
+            return
+
 # ---------------------------------------------
 # MAIN
 # ---------------------------------------------
