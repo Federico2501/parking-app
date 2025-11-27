@@ -1456,11 +1456,7 @@ def view_suplente(profile):
         except Exception:
             continue
 
-    # Unimos claves
-    claves = set()
-    claves.update(slots_user.keys())
-    claves.update(pre_user.keys())
-
+    claves = set(slots_user.keys()) | set(pre_user.keys())
     claves_ordenadas = sorted(claves, key=lambda x: (x[0], x[1]))
 
     st.markdown("### 🔜 Tus próximas reservas / solicitudes")
@@ -1487,7 +1483,6 @@ def view_suplente(profile):
                 elif estado == "RECHAZADO":
                     texto = f"- {fecha_txt} – {franja_txt} – _Solicitud no aprobada_"
                 else:
-                    # CANCELADO u otro → no debería salir, pero por si acaso
                     continue
             lineas.append(texto)
 
@@ -1497,9 +1492,9 @@ def view_suplente(profile):
             st.markdown("_No tienes reservas ni solicitudes futuras._")
 
     # ---------------------------
-    # 3) Semana actual (hoy → viernes) con vista agregada
+    # 3) Semana actual (hoy → viernes) con vista agregada + día completo
     # ---------------------------
-    lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
+    lunes = hoy - timedelta(days=hoy.weekday())
     all_dias_semana = [lunes + timedelta(days=i) for i in range(5)]
     dias_semana = [d for d in all_dias_semana if d >= hoy]
     if not dias_semana:
@@ -1507,7 +1502,7 @@ def view_suplente(profile):
         return
     fin_semana = dias_semana[-1]
 
-    # 3.a) Cargar todos los slots de la semana
+    # 3.a) Cargar slots de la semana
     try:
         resp_slots = requests.get(
             f"{rest_url}/slots",
@@ -1526,7 +1521,7 @@ def view_suplente(profile):
 
     from collections import defaultdict
     libres = defaultdict(int)      # (fecha, franja) -> nº plazas cedidas libres
-    reservas_user = {}             # (fecha, franja) -> plaza_id (slots firmes del usuario)
+    reservas_user = {}             # (fecha, franja) -> plaza_id
 
     for fila in datos_slots:
         try:
@@ -1586,24 +1581,58 @@ def view_suplente(profile):
         "Para hoy reservas directamente; para días futuros, haces solicitudes._"
     )
 
-    header_cols = st.columns(3)
+    header_cols = st.columns(4)
     header_cols[0].markdown("**Día**")
     header_cols[1].markdown("**Mañana**")
     header_cols[2].markdown("**Tarde**")
+    header_cols[3].markdown("**Día completo**")
 
     reserva_click = None         # (fecha, franja, es_hoy)
     cancelar_slot_click = None   # (fecha, franja, plaza_id)
     cancelar_pre_click = None    # (fecha, franja)
+    activar_pack_click = None    # fecha
+    quitar_pack_click = None     # fecha
 
     for d in dias_semana:
-        cols = st.columns(3)
+        cols = st.columns(4)
         cols[0].write(d.strftime("%a %d/%m"))
 
-        for idx, franja in enumerate(["M", "T"], start=1):
-            key_ft = (d, franja)
-            col = cols[idx]
+        key_M = (d, "M")
+        key_T = (d, "T")
 
-            # 1) Reserva firme en slots (ya tiene plaza)
+        tiene_slot_M = key_M in reservas_user
+        tiene_slot_T = key_T in reservas_user
+
+        pre_M = pre_sem.get(key_M)
+        pre_T = pre_sem.get(key_T)
+
+        # Día completo "activo" cuando hay solicitud PENDIENTE en M y T y no hay slots
+        full_day_pendiente = (
+            not tiene_slot_M and not tiene_slot_T and
+            pre_M == "PENDIENTE" and pre_T == "PENDIENTE"
+        )
+
+        puede_dia_completo = (d > hoy) and se_puede_modificar_slot(d, "reservar")
+
+        # Solo dejamos crear "Día completo" si el día está limpio (sin slots ni pre_reservas)
+        puede_solicitar_pack = (
+            puede_dia_completo
+            and not full_day_pendiente
+            and not tiene_slot_M and not tiene_slot_T
+            and key_M not in pre_sem
+            and key_T not in pre_sem
+        )
+
+        # --- Columnas Mañana / Tarde ---
+        for idx, franja in enumerate(["M", "T"], start=1):
+            col = cols[idx]
+            key_ft = (d, franja)
+
+            if full_day_pendiente:
+                col.markdown("🕒 Incluida en día completo")
+                continue
+
+            # 1) Reserva firme en slots
             if key_ft in reservas_user:
                 plaza_id = reservas_user[key_ft]
                 if d == hoy:
@@ -1624,7 +1653,6 @@ def view_suplente(profile):
                         cancelar_pre_click = (d, franja)
                 elif estado == "ASIGNADO":
                     col.markdown("✅ Plaza asignada (aún sin plaza concreta)")
-                    # Opcional: permitir cancelarla mientras se pueda
                     if col.button("Cancelar", key=f"cancel_asig_{d.isoformat()}_{franja}"):
                         cancelar_pre_click = (d, franja)
                 elif estado == "RECHAZADO":
@@ -1633,7 +1661,7 @@ def view_suplente(profile):
                     col.markdown("—")
                 continue
 
-            # 3) No hay reserva ni solicitud del usuario → puede solicitar si hay hueco
+            # 3) Sin reserva ni solicitud → botones de solicitar / reservar
             num_disp = libres.get(key_ft, 0)
             if num_disp > 0 and se_puede_modificar_slot(d, "reservar"):
                 if d == hoy:
@@ -1645,8 +1673,21 @@ def view_suplente(profile):
             else:
                 col.markdown("⬜️ _No disponible_")
 
+        # --- Columna Día completo ---
+        col_full = cols[3]
+        if not puede_dia_completo:
+            col_full.markdown("—")
+        elif full_day_pendiente:
+            if col_full.button("Quitar día completo", key=f"pack_off_{d.isoformat()}"):
+                quitar_pack_click = d
+        elif puede_solicitar_pack:
+            if col_full.button("Día completo", key=f"pack_on_{d.isoformat()}"):
+                activar_pack_click = d
+        else:
+            col_full.markdown("_Usando franjas sueltas_")
+
     # ---------------------------
-    # 4) Gestión de clicks: cancelar reserva firme
+    # 4) Cancelar reserva firme (slots)
     # ---------------------------
     if cancelar_slot_click is not None:
         dia_cancel, franja_cancel, plaza_cancel = cancelar_slot_click
@@ -1665,7 +1706,6 @@ def view_suplente(profile):
             return
 
         try:
-            # Liberar slot en slots
             payload = [{
                 "fecha": dia_cancel.isoformat(),
                 "plaza_id": plaza_cancel,
@@ -1687,9 +1727,8 @@ def view_suplente(profile):
                 st.code(r_update.text)
                 return
 
-            # Marcar pre_reservas asociadas como CANCELADO (si existiesen)
             try:
-                r_pre_cancel = requests.patch(
+                requests.patch(
                     f"{rest_url}/pre_reservas",
                     headers=headers,
                     params={
@@ -1702,7 +1741,7 @@ def view_suplente(profile):
                     timeout=10,
                 )
             except Exception:
-                pass  # si falla esto, al menos hemos liberado el slot
+                pass
 
             st.success(
                 f"Reserva cancelada para {dia_cancel.strftime('%d/%m')} "
@@ -1717,7 +1756,7 @@ def view_suplente(profile):
             return
 
     # ---------------------------
-    # 5) Gestión de clicks: cancelar pre-reserva (pendiente / asignada)
+    # 5) Cancelar pre-reserva (pendiente/asignada)
     # ---------------------------
     if cancelar_pre_click is not None:
         dia_cancel, franja_cancel = cancelar_pre_click
@@ -1765,7 +1804,7 @@ def view_suplente(profile):
             return
 
     # ---------------------------
-    # 6) Gestión de clicks: nueva reserva / solicitud
+    # 6) Nueva reserva / solicitud (franjas sueltas)
     # ---------------------------
     if reserva_click is not None:
         dia_reserva, franja_reserva, es_hoy = reserva_click
@@ -1865,6 +1904,91 @@ def view_suplente(profile):
             st.error("Ha ocurrido un error al intentar reservar/solicitar la plaza.")
             st.code(str(e))
             return
+
+    # ---------------------------
+    # 7) Día completo: crear / quitar pack (dos solicitudes)
+    # ---------------------------
+    if activar_pack_click is not None:
+        dia = activar_pack_click
+        if not se_puede_modificar_slot(dia, "reservar"):
+            st.error(
+                "Ya no puedes solicitar día completo: "
+                "las solicitudes para mañana quedan bloqueadas a partir de las 20:00."
+            )
+            return
+        try:
+            payload_pre = [
+                {
+                    "usuario_id": user_id,
+                    "fecha": dia.isoformat(),
+                    "franja": "M",
+                    "estado": "PENDIENTE",
+                },
+                {
+                    "usuario_id": user_id,
+                    "fecha": dia.isoformat(),
+                    "franja": "T",
+                    "estado": "PENDIENTE",
+                },
+            ]
+            r_pre = requests.post(
+                f"{rest_url}/pre_reservas",
+                headers=headers,
+                json=payload_pre,
+                timeout=10,
+            )
+            if r_pre.status_code >= 400:
+                st.error("Supabase ha devuelto un error al registrar el día completo:")
+                st.code(r_pre.text)
+                return
+
+            st.success(
+                f"Solicitado **día completo** para {dia.strftime('%d/%m')}. "
+                "Entrará en el sorteo correspondiente. ✅"
+            )
+            st.rerun()
+
+        except Exception as e:
+            st.error("Ha ocurrido un error al solicitar día completo.")
+            st.code(str(e))
+            return
+
+    if quitar_pack_click is not None:
+        dia = quitar_pack_click
+        if not se_puede_modificar_slot(dia, "cancelar"):
+            st.error(
+                "Ya no puedes cancelar el día completo: "
+                "las solicitudes para mañana quedan bloqueadas a partir de las 20:00."
+            )
+            return
+        try:
+            r_pre_cancel = requests.patch(
+                f"{rest_url}/pre_reservas",
+                headers=headers,
+                params={
+                    "usuario_id": f"eq.{user_id}",
+                    "fecha": f"eq.{dia.isoformat()}",
+                    "franja": "in.(M,T)",
+                    "estado": "in.(PENDIENTE,ASIGNADO)",
+                },
+                json={"estado": "CANCELADO"},
+                timeout=10,
+            )
+            if r_pre_cancel.status_code >= 400:
+                st.error("Supabase ha devuelto un error al cancelar el día completo:")
+                st.code(r_pre_cancel.text)
+                return
+
+            st.success(
+                f"Día completo cancelado para {dia.strftime('%d/%m')}."
+            )
+            st.rerun()
+
+        except Exception as e:
+            st.error("Ha ocurrido un error al cancelar el día completo.")
+            st.code(str(e))
+            return
+
 
 # ---------------------------------------------
 # MAIN
