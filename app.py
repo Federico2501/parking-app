@@ -758,16 +758,25 @@ def view_suplente(profile):
         cols[0].write(d.strftime("%a %d/%m"))
 
         for idx, franja in enumerate(["M", "T"], start=1):
+
             # ¿Este usuario ya ha reservado esta franja?
             if (d, franja) in reservas_usuario:
                 plaza_id = reservas_usuario[(d, franja)]
+
+                # HOY = reserva definitiva; FUTURO = solicitud pendiente de sorteo
+                texto_estado = "Has reservado" if d == hoy else "Has solicitado"
+
                 cols[idx].markdown(
-                    f"✅ Has reservado\n**P-{plaza_id}**"
+                    f"✅ {texto_estado}\n**P-{plaza_id}**"
                 )
+
                 if cols[idx].button("Cancelar", key=f"cancel_{d.isoformat()}_{franja}"):
                     cancel_seleccionada = (d, franja, plaza_id)
+
                 continue
 
+        # aquí sigue tu lógica de "No disponible", botones de reservar, etc.
+            
             num_disponibles = disponibles.get((d, franja), 0)
 
             if num_disponibles > 0:
