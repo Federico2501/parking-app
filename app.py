@@ -71,12 +71,17 @@ def ejecutar_sorteo(fecha_obj: date):
     Lógica:
       - Lee slots cedidos (owner_usa = false, reservado_por = null) para esa fecha.
       - Lee pre_reservas PENDIENTE para esa fecha.
+      - Identifica:
+          * PACKS de día completo: mismo usuario con M y T PENDIENTE ese día.
+          * Solicitudes sueltas (solo M o solo T).
       - Cuenta usos mensuales de cada suplente (slots ya reservados en el mes de la fecha).
-      - Para cada franja (M/T):
-          * Ordena solicitudes por (usos_mes asc, random).
-          * Asigna plazas hasta donde alcance.
-          * Marca pre_reservas como ASIGNADO / RECHAZADO.
-          * Actualiza slots (reservado_por, es_sorteo = true).
+      - Reparte en este orden:
+          1) PACKS (día completo) → necesitan 1 plaza en M y 1 en T a la vez.
+          2) Solicitudes sueltas por franja (M / T).
+      - Empate siempre se resuelve por menos usos en el mes + random.
+      - Actualiza:
+          * slots (reservado_por, es_sorteo = true),
+          * pre_reservas → ASIGNADO / RECHAZADO.
     """
     rest_url, headers, _ = get_rest_info()
     fecha_str = fecha_obj.isoformat()
@@ -87,7 +92,7 @@ def ejecutar_sorteo(fecha_obj: date):
             f"{rest_url}/slots",
             headers=headers,
             params={
-                "select": "id,fecha,franja,plaza_id,owner_usa,reservado_por",
+                "select": "fecha,franja,plaza_id,owner_usa,reservado_por",
                 "fecha": f"eq.{fecha_str}",
                 "owner_usa": "eq.false",
                 "reservado_por": "is.null",
@@ -152,17 +157,17 @@ def ejecutar_sorteo(fecha_obj: date):
     usos_mes = {}
     for s in slots_mes_raw:
         try:
-            if s["reservado_por"] is None:
+            uid = s["reservado_por"]
+            if uid is None:
                 continue
             fecha_slot = date.fromisoformat(s["fecha"][:10])
             if not (first_day <= fecha_slot < next_month_first):
                 continue
-            uid = s["reservado_por"]
             usos_mes[uid] = usos_mes.get(uid, 0) + 1
         except Exception:
             continue
 
-    # 4) Agrupamos plazas libres y solicitudes por franja
+    # 4) Agrupamos plazas libres por franja
     from collections import defaultdict
 
     plazas_por_franja = defaultdict(list)   # franja -> [plaza_id,...]
@@ -170,42 +175,151 @@ def ejecutar_sorteo(fecha_obj: date):
         fr = sl["franja"]
         plazas_por_franja[fr].append(sl["plaza_id"])
 
-    pre_por_franja = defaultdict(list)      # franja -> [pre_reserva_row,...]
+    # 5) Separar PACKS (día completo) de solicitudes sueltas
+    #    Un PACK = mismo usuario con M y T PENDIENTE en esa fecha.
+    by_user = defaultdict(list)
     for pr in pre_pendientes:
-        pre_por_franja[pr["franja"]].append(pr)
+        by_user[pr["usuario_id"]].append(pr)
 
-    asignados_total = 0
-    rechazados_total = 0
+    packs = []  # cada elemento: {"usuario_id":..., "M":row, "T":row}
+    singles_por_franja = {"M": [], "T": []}
 
-    # 5) Sorteo por franja
+    for uid, rows in by_user.items():
+        franjas_user = {r["franja"] for r in rows}
+        if franjas_user == {"M", "T"} and len(rows) == 2:
+            # PACK de día completo
+            pack_data = {"usuario_id": uid}
+            for r in rows:
+                pack_data[r["franja"]] = r
+            packs.append(pack_data)
+        else:
+            # Solicitudes sueltas (puede haber 1 o varias, pero las tratamos independientes)
+            for r in rows:
+                fr = r["franja"]
+                if fr in ("M", "T"):
+                    singles_por_franja[fr].append(r)
+
+    asignados_ids = []
+    rechazados_ids = []
+
+    # 6) Primero: sortear PACKS de día completo
+    if packs:
+        # Ordenar packs por (usos_mes asc, random)
+        def clave_pack(p):
+            uid = p["usuario_id"]
+            u = usos_mes.get(uid, 0)
+            return (u, random.random())
+
+        packs_ordenados = sorted(packs, key=clave_pack)
+
+        plazas_M = plazas_por_franja.get("M", [])
+        plazas_T = plazas_por_franja.get("T", [])
+
+        nuevos_plazas_M = list(plazas_M)
+        nuevos_plazas_T = list(plazas_T)
+
+        for pack in packs_ordenados:
+            uid = pack["usuario_id"]
+            row_M = pack.get("M")
+            row_T = pack.get("T")
+
+            # ¿Hay capacidad en ambas franjas?
+            if nuevos_plazas_M and nuevos_plazas_T:
+                plaza_M = nuevos_plazas_M.pop(0)
+                plaza_T = nuevos_plazas_T.pop(0)
+
+                # Asignamos slot mañana
+                payload_M = [{
+                    "fecha": fecha_str,
+                    "plaza_id": plaza_M,
+                    "franja": "M",
+                    "owner_usa": False,
+                    "reservado_por": uid,
+                    "es_sorteo": True,
+                    "estado": "CONFIRMADO",
+                }]
+                # Asignamos slot tarde
+                payload_T = [{
+                    "fecha": fecha_str,
+                    "plaza_id": plaza_T,
+                    "franja": "T",
+                    "owner_usa": False,
+                    "reservado_por": uid,
+                    "es_sorteo": True,
+                    "estado": "CONFIRMADO",
+                }]
+
+                try:
+                    local_headers = headers.copy()
+                    local_headers["Prefer"] = "resolution=merge-duplicates"
+
+                    rM = requests.post(
+                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                        headers=local_headers,
+                        json=payload_M,
+                        timeout=10,
+                    )
+                    if rM.status_code >= 400:
+                        st.error("Error al asignar plaza de mañana a un pack.")
+                        st.code(rM.text)
+                        return
+
+                    rT = requests.post(
+                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                        headers=local_headers,
+                        json=payload_T,
+                        timeout=10,
+                    )
+                    if rT.status_code >= 400:
+                        st.error("Error al asignar plaza de tarde a un pack.")
+                        st.code(rT.text)
+                        return
+
+                    # Ambos pre_reservas del pack pasan a ASIGNADO
+                    asignados_ids.append(row_M["id"])
+                    asignados_ids.append(row_T["id"])
+
+                    # Incrementamos usos del usuario (2 franjas más)
+                    usos_mes[uid] = usos_mes.get(uid, 0) + 2
+
+                except Exception as e:
+                    st.error("Ha ocurrido un error al asignar un pack de día completo.")
+                    st.code(str(e))
+                    return
+
+            else:
+                # No hay capacidad en M o T → el pack pierde entero
+                if "M" in pack and pack["M"]["id"] not in rechazados_ids:
+                    rechazados_ids.append(pack["M"]["id"])
+                if "T" in pack and pack["T"]["id"] not in rechazados_ids:
+                    rechazados_ids.append(pack["T"]["id"])
+
+        # Actualizamos plazas libres tras packs
+        plazas_por_franja["M"] = nuevos_plazas_M
+        plazas_por_franja["T"] = nuevos_plazas_T
+
+    # 7) Segundo: sortear solicitudes sueltas, franja a franja
     for franja in ["M", "T"]:
         plazas = plazas_por_franja.get(franja, [])
-        solicitudes = pre_por_franja.get(franja, [])
+        solicitudes = singles_por_franja.get(franja, [])
 
         if not plazas or not solicitudes:
-            # Si no hay plazas o no hay solicitudes, nada que hacer en esta franja
             continue
 
-        # Ordenamos solicitudes por (usos_mes asc, random)
-        def clave_orden(pr):
+        def clave_single(pr):
             uid = pr["usuario_id"]
-            usos = usos_mes.get(uid, 0)
-            return (usos, random.random())
+            u = usos_mes.get(uid, 0)
+            return (u, random.random())
 
-        solicitudes_ordenadas = sorted(solicitudes, key=clave_orden)
+        solicitudes_ordenadas = sorted(solicitudes, key=clave_single)
 
         num_asignables = min(len(plazas), len(solicitudes_ordenadas))
-        ganadores = solicitudes_ordenadas[:num_asignables]
-        perdedores = solicitudes_ordenadas[num_asignables:]
+        plazas_disponibles = list(plazas)
 
-        # 5.1 Asignar plazas a ganadores: actualizamos slots
-        try:
-            local_headers = headers.copy()
-            local_headers["Prefer"] = "resolution=merge-duplicates"
-
-            for i, pr in enumerate(ganadores):
-                uid = pr["usuario_id"]
-                plaza_id = plazas[i]
+        for i, pr in enumerate(solicitudes_ordenadas):
+            uid = pr["usuario_id"]
+            if i < num_asignables and plazas_disponibles:
+                plaza_id = plazas_disponibles.pop(0)
 
                 payload = [{
                     "fecha": fecha_str,
@@ -217,69 +331,72 @@ def ejecutar_sorteo(fecha_obj: date):
                     "estado": "CONFIRMADO",
                 }]
 
-                r = requests.post(
-                    f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
-                    headers=local_headers,
-                    json=payload,
-                    timeout=10,
-                )
-                if r.status_code >= 400:
-                    st.error("Error al asignar una plaza en el sorteo.")
-                    st.code(r.text)
+                try:
+                    local_headers = headers.copy()
+                    local_headers["Prefer"] = "resolution=merge-duplicates"
+
+                    r = requests.post(
+                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                        headers=local_headers,
+                        json=payload,
+                        timeout=10,
+                    )
+                    if r.status_code >= 400:
+                        st.error("Error al asignar una plaza en el sorteo.")
+                        st.code(r.text)
+                        return
+
+                    asignados_ids.append(pr["id"])
+                    usos_mes[uid] = usos_mes.get(uid, 0) + 1
+
+                except Exception as e:
+                    st.error("Ha ocurrido un error al asignar una solicitud suelta.")
+                    st.code(str(e))
                     return
+            else:
+                rechazados_ids.append(pr["id"])
 
-        except Exception as e:
-            st.error("Ha ocurrido un error al asignar las plazas del sorteo.")
-            st.code(str(e))
-            return
+        # Guardamos las plazas restantes (por si queremos usarlas para debug)
+        plazas_por_franja[franja] = plazas_disponibles
 
-        # 5.2 Actualizar estados de pre_reservas: ASIGNADO / RECHAZADO
-        try:
-            # Ganadores
-            if ganadores:
-                ids_ganadores = ",".join([g["id"] for g in ganadores])
-                resp_patch_win = requests.patch(
-                    f"{rest_url}/pre_reservas",
-                    headers=headers,
-                    params={
-                        "id": f"in.({ids_ganadores})",
-                    },
-                    json={"estado": "ASIGNADO"},
-                    timeout=10,
-                )
-                if resp_patch_win.status_code >= 400:
-                    st.error("Error al marcar pre-reservas como ASIGNADO.")
-                    st.code(resp_patch_win.text)
-                    return
+    # 8) Actualizar estados de pre_reservas en bloque
+    try:
+        if asignados_ids:
+            ids_str = ",".join(asignados_ids)
+            resp_patch_win = requests.patch(
+                f"{rest_url}/pre_reservas",
+                headers=headers,
+                params={"id": f"in.({ids_str})"},
+                json={"estado": "ASIGNADO"},
+                timeout=10,
+            )
+            if resp_patch_win.status_code >= 400:
+                st.error("Error al marcar pre-reservas como ASIGNADO.")
+                st.code(resp_patch_win.text)
+                return
 
-            # Perdedores
-            if perdedores:
-                ids_perdedores = ",".join([p["id"] for p in perdedores])
-                resp_patch_lose = requests.patch(
-                    f"{rest_url}/pre_reservas",
-                    headers=headers,
-                    params={
-                        "id": f"in.({ids_perdedores})",
-                    },
-                    json={"estado": "RECHAZADO"},
-                    timeout=10,
-                )
-                if resp_patch_lose.status_code >= 400:
-                    st.error("Error al marcar pre-reservas como RECHAZADO.")
-                    st.code(resp_patch_lose.text)
-                    return
+        if rechazados_ids:
+            ids_str = ",".join(rechazados_ids)
+            resp_patch_lose = requests.patch(
+                f"{rest_url}/pre_reservas",
+                headers=headers,
+                params={"id": f"in.({ids_str})"},
+                json={"estado": "RECHAZADO"},
+                timeout=10,
+            )
+            if resp_patch_lose.status_code >= 400:
+                st.error("Error al marcar pre-reservas como RECHAZADO.")
+                st.code(resp_patch_lose.text)
+                return
 
-        except Exception as e:
-            st.error("Ha ocurrido un error al actualizar el estado de las pre-reservas.")
-            st.code(str(e))
-            return
-
-        asignados_total += len(ganadores)
-        rechazados_total += len(perdedores)
+    except Exception as e:
+        st.error("Ha ocurrido un error al actualizar el estado de las pre-reservas.")
+        st.code(str(e))
+        return
 
     st.success(
         f"Sorteo ejecutado para el {fecha_obj.strftime('%d/%m/%Y')}: "
-        f"{asignados_total} solicitudes ASIGNADAS, {rechazados_total} RECHAZADAS."
+        f"{len(asignados_ids)} solicitudes ASIGNADAS, {len(rechazados_ids)} RECHAZADAS."
     )
 
 
