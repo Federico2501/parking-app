@@ -924,11 +924,9 @@ def view_titular(profile):
         st.code(str(e))
         slots = []
 
-    # Mapeamos:
-    #   - estado[(fecha, franja)] -> owner_usa
-    #   - reservas[(fecha, franja)] -> reservado_por (None o uuid)
-    estado = {}
-    reservas = {}
+    # Mapeos:
+    estado = {}   # (fecha, franja) -> owner_usa (bool)
+    reservas = {} # (fecha, franja) -> reservado_por (uuid o None)
 
     for s in slots:
         try:
@@ -973,7 +971,7 @@ def view_titular(profile):
     header_cols[2].markdown("**Tarde**")
     header_cols[3].markdown("**Día completo**")
 
-    # Solo guardaremos decisiones en franjas editables (sin reserva y dentro de ventana horaria)
+    # Solo guardaremos decisiones en franjas editables
     cedencias = {}
 
     for d in dias_semana:
@@ -982,7 +980,7 @@ def view_titular(profile):
 
         editable = se_puede_modificar_cesion(d)
 
-        # Estado actual M/T
+        # Estado actual en BD
         owner_usa_M = estado.get((d, "M"), True)
         owner_usa_T = estado.get((d, "T"), True)
         reservado_M = reservas.get((d, "M"))
@@ -993,8 +991,9 @@ def view_titular(profile):
         key_T = f"cede_{d.isoformat()}_T"
         key_full = f"cede_full_{d.isoformat()}"
 
-        # Inicializar valores por defecto en session_state si no existen
+        # Inicializar defaults solo una vez
         if key_M not in st.session_state:
+            # cedida si owner_usa=False y NO hay suplente
             st.session_state[key_M] = (not owner_usa_M) and (reservado_M is None)
         if key_T not in st.session_state:
             st.session_state[key_T] = (not owner_usa_T) and (reservado_T is None)
@@ -1010,13 +1009,9 @@ def view_titular(profile):
             cols[1].markdown(texto_M)
             cedencias[(d, "M")] = not owner_usa_M
         else:
-            cedida_M = cols[1].checkbox(
-                "Cedo",
-                value=st.session_state[key_M],
-                key=key_M,
-            )
-            st.session_state[key_M] = cedida_M
-            cedencias[(d, "M")] = cedida_M
+            # checkbox SIN value= -> usa st.session_state[key_M] automáticamente
+            cols[1].checkbox("Cedo", key=key_M)
+            # de momento no fijamos cedencias, lo haremos al final del día
 
         # ---------- Columna Tarde ----------
         if reservado_T is not None:
@@ -1027,52 +1022,36 @@ def view_titular(profile):
             cols[2].markdown(texto_T)
             cedencias[(d, "T")] = not owner_usa_T
         else:
-            cedida_T = cols[2].checkbox(
-                "Cedo",
-                value=st.session_state[key_T],
-                key=key_T,
-            )
-            st.session_state[key_T] = cedida_T
-            cedencias[(d, "T")] = cedida_T
+            cols[2].checkbox("Cedo", key=key_T)
 
         # ---------- Columna Día completo ----------
-        # Solo tiene sentido si el día es editable y ninguna franja está ya reservada por un suplente
         if not editable or reservado_M is not None or reservado_T is not None:
-            # Indicamos si, de facto, está todo cedido o no
+            # Solo texto informativo
             if (not owner_usa_M) and (not owner_usa_T):
                 cols[3].markdown("✅ Día completo cedido")
             else:
                 cols[3].markdown("—")
         else:
             # Sin reservas de suplente y editable → checkbox de "Día completo"
-            full_default = st.session_state[key_M] and st.session_state[key_T]
-            st.session_state[key_full] = full_default if not st.session_state.get(key_full, False) else st.session_state[key_full]
+            # Ajustamos full en función de M/T si venía sin inicializar
+            st.session_state[key_full] = st.session_state[key_M] and st.session_state[key_T] \
+                if key_full not in st.session_state else st.session_state[key_full]
 
-            full_checked = cols[3].checkbox(
-                "Ceder día completo",
-                value=st.session_state[key_full],
-                key=key_full,
-            )
+            # De nuevo, sin value=, usa session_state[key_full]
+            full_checked = cols[3].checkbox("Ceder día completo", key=key_full)
 
-            # Sincronización simple:
-            # 1) Si el usuario marca "día completo", activamos mañana y tarde.
+            # Si marca día completo → forzamos M y T a True
             if full_checked:
                 st.session_state[key_M] = True
                 st.session_state[key_T] = True
 
-            # 2) Si mañana y tarde están activadas, marcamos día completo.
-            if st.session_state[key_M] and st.session_state[key_T]:
-                st.session_state[key_full] = True
-            else:
-                # Si solo una de las dos está activa, dejamos "día completo" como está
-                # (no lo forzamos a False para no confundir si el usuario juega con él)
-                if not (st.session_state[key_M] and st.session_state[key_T]):
-                    # coherencia mínima: si ninguna de las dos, entonces quitamos full
-                    if not st.session_state[key_M] and not st.session_state[key_T]:
-                        st.session_state[key_full] = False
+            # Si desmarca día completo, no tocamos M/T (puede querer solo una franja)
 
-            # Actualizamos cedencias según los estados finales
+        # Después de posible sincronización con día completo,
+        # fijamos cedencias para franjas editables
+        if editable and reservado_M is None:
             cedencias[(d, "M")] = st.session_state[key_M]
+        if editable and reservado_T is None:
             cedencias[(d, "T")] = st.session_state[key_T]
 
     st.markdown("---")
