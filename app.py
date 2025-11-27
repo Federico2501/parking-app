@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import random
+import uuid
 from datetime import date, timedelta, datetime, time
 
 st.set_page_config(
@@ -1906,7 +1907,7 @@ def view_suplente(profile):
             return
 
     # ---------------------------
-    # 7) Día completo: crear / quitar pack (dos solicitudes)
+    # 7) Día completo: crear / quitar pack (dos solicitudes ligadas)
     # ---------------------------
     if activar_pack_click is not None:
         dia = activar_pack_click
@@ -1917,18 +1918,23 @@ def view_suplente(profile):
             )
             return
         try:
+            # pack_id común para mañana y tarde → todo-o-nada en el sorteo
+            pack_id = str(uuid.uuid4())
+
             payload_pre = [
                 {
                     "usuario_id": user_id,
                     "fecha": dia.isoformat(),
                     "franja": "M",
                     "estado": "PENDIENTE",
+                    "pack_id": pack_id,
                 },
                 {
                     "usuario_id": user_id,
                     "fecha": dia.isoformat(),
                     "franja": "T",
                     "estado": "PENDIENTE",
+                    "pack_id": pack_id,
                 },
             ]
             r_pre = requests.post(
@@ -1952,43 +1958,6 @@ def view_suplente(profile):
             st.error("Ha ocurrido un error al solicitar día completo.")
             st.code(str(e))
             return
-
-    if quitar_pack_click is not None:
-        dia = quitar_pack_click
-        if not se_puede_modificar_slot(dia, "cancelar"):
-            st.error(
-                "Ya no puedes cancelar el día completo: "
-                "las solicitudes para mañana quedan bloqueadas a partir de las 20:00."
-            )
-            return
-        try:
-            r_pre_cancel = requests.patch(
-                f"{rest_url}/pre_reservas",
-                headers=headers,
-                params={
-                    "usuario_id": f"eq.{user_id}",
-                    "fecha": f"eq.{dia.isoformat()}",
-                    "franja": "in.(M,T)",
-                    "estado": "in.(PENDIENTE,ASIGNADO)",
-                },
-                json={"estado": "CANCELADO"},
-                timeout=10,
-            )
-            if r_pre_cancel.status_code >= 400:
-                st.error("Supabase ha devuelto un error al cancelar el día completo:")
-                st.code(r_pre_cancel.text)
-                return
-
-            st.success(
-                f"Día completo cancelado para {dia.strftime('%d/%m')}."
-            )
-            st.rerun()
-
-        except Exception as e:
-            st.error("Ha ocurrido un error al cancelar el día completo.")
-            st.code(str(e))
-            return
-
 
 # ---------------------------------------------
 # MAIN
