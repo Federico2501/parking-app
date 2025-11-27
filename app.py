@@ -967,47 +967,113 @@ def view_titular(profile):
 
     st.markdown("### Semana actual")
 
-    header_cols = st.columns(3)
+    header_cols = st.columns(4)
     header_cols[0].markdown("**Día**")
     header_cols[1].markdown("**Mañana**")
     header_cols[2].markdown("**Tarde**")
+    header_cols[3].markdown("**Día completo**")
 
     # Solo guardaremos decisiones en franjas editables (sin reserva y dentro de ventana horaria)
     cedencias = {}
 
     for d in dias_semana:
-        cols = st.columns(3)
+        cols = st.columns(4)
         cols[0].write(d.strftime("%a %d/%m"))
 
-        for idx, franja in enumerate(["M", "T"], start=1):
-            owner_usa = estado.get((d, franja), True)
-            reservado_por = reservas.get((d, franja))
+        editable = se_puede_modificar_cesion(d)
 
-            # Si ya hay un suplente reservado: el titular NO puede tocarlo
-            if reservado_por is not None:
-                cols[idx].markdown("✅ Cedida (reservada)")
-                continue
+        # Estado actual M/T
+        owner_usa_M = estado.get((d, "M"), True)
+        owner_usa_T = estado.get((d, "T"), True)
+        reservado_M = reservas.get((d, "M"))
+        reservado_T = reservas.get((d, "T"))
 
-            # ¿Está dentro de la ventana en la que el titular puede modificar?
-            editable = se_puede_modificar_cesion(d)
+        # Claves de estado en session_state
+        key_M = f"cede_{d.isoformat()}_M"
+        key_T = f"cede_{d.isoformat()}_T"
+        key_full = f"cede_full_{d.isoformat()}"
 
-            texto_base = "Titular usa" if owner_usa else "Cedida (libre)"
+        # Inicializar valores por defecto en session_state si no existen
+        if key_M not in st.session_state:
+            st.session_state[key_M] = (not owner_usa_M) and (reservado_M is None)
+        if key_T not in st.session_state:
+            st.session_state[key_T] = (not owner_usa_T) and (reservado_T is None)
+        if key_full not in st.session_state:
+            st.session_state[key_full] = st.session_state[key_M] and st.session_state[key_T]
 
-            if not editable:
-                # Fuera de ventana: solo mostramos el estado, sin checkbox
-                cols[idx].markdown(texto_base)
-                continue
-
-            # Dentro de ventana: el titular puede marcar/desmarcar "Cedo"
-            key = f"cede_{d.isoformat()}_{franja}"
-            cedida_por_defecto = not owner_usa  # si no la usa, es que la cedió
-
-            cedida = cols[idx].checkbox(
+        # ---------- Columna Mañana ----------
+        if reservado_M is not None:
+            cols[1].markdown("✅ Cedida (reservada)")
+            cedencias[(d, "M")] = not owner_usa_M
+        elif not editable:
+            texto_M = "Titular usa" if owner_usa_M else "Cedida (libre)"
+            cols[1].markdown(texto_M)
+            cedencias[(d, "M")] = not owner_usa_M
+        else:
+            cedida_M = cols[1].checkbox(
                 "Cedo",
-                value=cedida_por_defecto,
-                key=key,
+                value=st.session_state[key_M],
+                key=key_M,
             )
-            cedencias[(d, franja)] = cedida
+            st.session_state[key_M] = cedida_M
+            cedencias[(d, "M")] = cedida_M
+
+        # ---------- Columna Tarde ----------
+        if reservado_T is not None:
+            cols[2].markdown("✅ Cedida (reservada)")
+            cedencias[(d, "T")] = not owner_usa_T
+        elif not editable:
+            texto_T = "Titular usa" if owner_usa_T else "Cedida (libre)"
+            cols[2].markdown(texto_T)
+            cedencias[(d, "T")] = not owner_usa_T
+        else:
+            cedida_T = cols[2].checkbox(
+                "Cedo",
+                value=st.session_state[key_T],
+                key=key_T,
+            )
+            st.session_state[key_T] = cedida_T
+            cedencias[(d, "T")] = cedida_T
+
+        # ---------- Columna Día completo ----------
+        # Solo tiene sentido si el día es editable y ninguna franja está ya reservada por un suplente
+        if not editable or reservado_M is not None or reservado_T is not None:
+            # Indicamos si, de facto, está todo cedido o no
+            if (not owner_usa_M) and (not owner_usa_T):
+                cols[3].markdown("✅ Día completo cedido")
+            else:
+                cols[3].markdown("—")
+        else:
+            # Sin reservas de suplente y editable → checkbox de "Día completo"
+            full_default = st.session_state[key_M] and st.session_state[key_T]
+            st.session_state[key_full] = full_default if not st.session_state.get(key_full, False) else st.session_state[key_full]
+
+            full_checked = cols[3].checkbox(
+                "Ceder día completo",
+                value=st.session_state[key_full],
+                key=key_full,
+            )
+
+            # Sincronización simple:
+            # 1) Si el usuario marca "día completo", activamos mañana y tarde.
+            if full_checked:
+                st.session_state[key_M] = True
+                st.session_state[key_T] = True
+
+            # 2) Si mañana y tarde están activadas, marcamos día completo.
+            if st.session_state[key_M] and st.session_state[key_T]:
+                st.session_state[key_full] = True
+            else:
+                # Si solo una de las dos está activa, dejamos "día completo" como está
+                # (no lo forzamos a False para no confundir si el usuario juega con él)
+                if not (st.session_state[key_M] and st.session_state[key_T]):
+                    # coherencia mínima: si ninguna de las dos, entonces quitamos full
+                    if not st.session_state[key_M] and not st.session_state[key_T]:
+                        st.session_state[key_full] = False
+
+            # Actualizamos cedencias según los estados finales
+            cedencias[(d, "M")] = st.session_state[key_M]
+            cedencias[(d, "T")] = st.session_state[key_T]
 
     st.markdown("---")
     if st.button("Guardar cambios de la semana"):
@@ -1062,8 +1128,6 @@ def view_suplente(profile):
 
     # ---------------------------
     # 1) Próximas reservas / solicitudes (desde hoy en adelante)
-    #    - Reservas firmes -> slots
-    #    - Solicitudes -> pre_reservas (PENDIENTE / RECHAZADO)
     # ---------------------------
 
     # a) Reservas firmes (slots)
@@ -1267,22 +1331,34 @@ def view_suplente(profile):
     )
 
     # Cabecera
-    header_cols = st.columns(3)
+    header_cols = st.columns(4)
     header_cols[0].markdown("**Día**")
     header_cols[1].markdown("**Mañana**")
     header_cols[2].markdown("**Tarde**")
+    header_cols[3].markdown("**Día completo**")
 
     reserva_seleccionada = None
     cancel_seleccionada = None
+    full_reserva_seleccionada = None  # día completo
 
     # Pintamos la semana
     for d in dias_semana:
-        cols = st.columns(3)
+        cols = st.columns(4)
         cols[0].write(d.strftime("%a %d/%m"))
 
+        # Estado día completo (para texto o botón)
+        has_reserva_M = (d, "M") in reservas_slots
+        has_reserva_T = (d, "T") in reservas_slots
+        has_solic_M = (d, "M") in solicitudes_pend
+        has_solic_T = (d, "T") in solicitudes_pend
+
+        num_disp_M = disponibles.get((d, "M"), 0)
+        num_disp_T = disponibles.get((d, "T"), 0)
+
+        # ---- Columna Mañana / Tarde ----
         for idx, franja in enumerate(["M", "T"], start=1):
 
-            # 1) Reservas firmes en slots (da igual si hoy o futuro)
+            # 1) Reservas firmes en slots
             if (d, franja) in reservas_slots:
                 plaza_id = reservas_slots[(d, franja)]
 
@@ -1320,6 +1396,35 @@ def view_suplente(profile):
             else:
                 cols[idx].markdown("⬜️ _No disponible_")
 
+        # ---- Columna Día completo ----
+        # Casos donde mostramos solo texto:
+        if has_reserva_M and has_reserva_T:
+            cols[3].markdown("✅ Día completo reservado")
+        elif has_solic_M and has_solic_T:
+            cols[3].markdown("✅ Has solicitado día completo")
+        else:
+            # ¿Podemos ofrecer botón de día completo?
+            # Requisitos:
+            #  - No tener reservas ni solicitudes en M ni T
+            #  - Haber disponibilidad en M y T
+            sin_reservas_ni_solicitudes = (
+                not has_reserva_M and not has_reserva_T and
+                not has_solic_M and not has_solic_T
+            )
+            hay_disp_en_ambas = (num_disp_M > 0 and num_disp_T > 0)
+
+            if sin_reservas_ni_solicitudes and hay_disp_en_ambas:
+                if d == hoy:
+                    label_full = "Reservar día completo"
+                else:
+                    label_full = "Solicitar día completo"
+
+                key_full_btn = f"full_{d.isoformat()}"
+                if cols[3].button(label_full, key=key_full_btn):
+                    full_reserva_seleccionada = d
+            else:
+                cols[3].markdown("—")
+
     # ---------------------------
     # 4) Cancelar reserva / solicitud
     # ---------------------------
@@ -1328,7 +1433,6 @@ def view_suplente(profile):
 
         # ❶ Reservas firmes (slots)
         if tipo == "RESERVA":
-            # Comprobamos si se permite cancelar según la fecha y la hora
             if not se_puede_modificar_slot(dia_cancel, "cancelar"):
                 if dia_cancel == date.today():
                     st.error(
@@ -1380,7 +1484,6 @@ def view_suplente(profile):
 
         # ❷ Solicitudes (pre_reservas)
         elif tipo == "SOLICITUD":
-            # Aplicamos misma regla de corte para mañana: hasta 20:00
             if not se_puede_modificar_slot(dia_cancel, "cancelar"):
                 st.error(
                     "Ya no puedes cancelar esta solicitud: "
@@ -1420,7 +1523,135 @@ def view_suplente(profile):
     # ---------------------------
     # 5) Crear reserva nueva / solicitud nueva
     # ---------------------------
-    if reserva_seleccionada is not None:
+
+    # 5.a) Día completo
+    if full_reserva_seleccionada is not None:
+        dia_full = full_reserva_seleccionada
+
+        # HOY → dos reservas firmes en slots
+        if dia_full == hoy:
+            if not se_puede_modificar_slot(dia_full, "reservar"):
+                st.error("Ya no puedes reservar día completo para hoy.")
+                return
+
+            try:
+                # Necesitamos plaza en M y en T
+                plazas_encontradas = {}
+                for fr in ["M", "T"]:
+                    resp_libre = requests.get(
+                        f"{rest_url}/slots",
+                        headers=headers,
+                        params={
+                            "select": "plaza_id",
+                            "fecha": f"eq.{dia_full.isoformat()}",
+                            "franja": f"eq.{fr}",
+                            "owner_usa": "eq.false",
+                            "reservado_por": "is.null",
+                            "order": "plaza_id.asc",
+                            "limit": "1",
+                        },
+                        timeout=10,
+                    )
+                    if resp_libre.status_code != 200:
+                        st.error("Error al buscar plaza libre para día completo.")
+                        st.code(resp_libre.text)
+                        return
+
+                    libres = resp_libre.json()
+                    if not libres:
+                        st.error(
+                            "No hay plazas suficientes en mañana y tarde para "
+                            "reservar día completo."
+                        )
+                        return
+
+                    plazas_encontradas[fr] = libres[0]["plaza_id"]
+
+                local_headers = headers.copy()
+                local_headers["Prefer"] = "resolution=merge-duplicates"
+
+                for fr in ["M", "T"]:
+                    plaza_id = plazas_encontradas[fr]
+                    payload = [{
+                        "fecha": dia_full.isoformat(),
+                        "plaza_id": plaza_id,
+                        "franja": fr,
+                        "owner_usa": False,
+                        "reservado_por": user_id,
+                    }]
+
+                    r_update = requests.post(
+                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                        headers=local_headers,
+                        json=payload,
+                        timeout=10,
+                    )
+                    if r_update.status_code >= 400:
+                        st.error("Supabase ha devuelto un error al reservar día completo.")
+                        st.code(r_update.text)
+                        return
+
+                st.success(
+                    f"Día completo reservado para {dia_full.strftime('%d/%m')} "
+                    "(mañana y tarde)."
+                )
+                st.rerun()
+
+            except Exception as e:
+                st.error("Ha ocurrido un error al reservar día completo.")
+                st.code(str(e))
+                return
+
+        # FUTURO → dos pre_reservas PENDIENTE (M y T)
+        else:
+            if not se_puede_modificar_slot(dia_full, "reservar"):
+                st.error(
+                    "Ya no puedes solicitar día completo para esa fecha: "
+                    "las solicitudes para mañana quedan bloqueadas a partir de las 20:00."
+                )
+                return
+
+            try:
+                payload_pre = [
+                    {
+                        "usuario_id": user_id,
+                        "fecha": dia_full.isoformat(),
+                        "franja": "M",
+                        "estado": "PENDIENTE",
+                    },
+                    {
+                        "usuario_id": user_id,
+                        "fecha": dia_full.isoformat(),
+                        "franja": "T",
+                        "estado": "PENDIENTE",
+                    },
+                ]
+
+                resp_ins = requests.post(
+                    f"{rest_url}/pre_reservas",
+                    headers=headers,
+                    json=payload_pre,
+                    timeout=10,
+                )
+
+                if resp_ins.status_code >= 400:
+                    st.error("Supabase ha devuelto un error al guardar la solicitud de día completo:")
+                    st.code(resp_ins.text)
+                    return
+
+                st.success(
+                    f"Solicitud de día completo registrada para {dia_full.strftime('%d/%m')}. "
+                    "Entrará en el sorteo según disponibilidad."
+                )
+                st.rerun()
+
+            except Exception as e:
+                st.error("Ha ocurrido un error al registrar la solicitud de día completo.")
+                st.code(str(e))
+                return
+
+    # 5.b) Reserva / solicitud de una sola franja
+    if reserva_seleccionada is not None and full_reserva_seleccionada is None:
         dia_reserva, franja_reserva = reserva_seleccionada
 
         # ❶ HOY → reserva firme en slots
@@ -1439,7 +1670,7 @@ def view_suplente(profile):
                     params={
                         "select": "plaza_id",
                         "fecha": f"eq.{dia_reserva.isoformat()}",
-                        "franja": f"eq.{franja_reserva}",
+                        "franja": f"eq.{franja_reserva} ",
                         "owner_usa": "eq.false",
                         "reservado_por": "is.null",
                         "order": "plaza_id.asc",
@@ -1536,6 +1767,7 @@ def view_suplente(profile):
                 st.error("Ha ocurrido un error al registrar la solicitud.")
                 st.code(str(e))
                 return
+
 
 # ---------------------------------------------
 # MAIN
