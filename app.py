@@ -61,6 +61,288 @@ def se_puede_modificar_slot(fecha_slot: date, accion: str) -> bool:
     return True
 
 # ---------------------------------------------
+# Sorteo de plazas     
+# ---------------------------------------------
+
+def ejecutar_sorteo(fecha_obj: date):
+    """
+    Ejecuta el sorteo para una fecha dada (normalmente mañana).
+
+    Lógica:
+      - Lee slots cedidos (owner_usa = false, reservado_por = null) para esa fecha.
+      - Lee pre_reservas PENDIENTE para esa fecha.
+      - Cuenta usos mensuales de cada suplente (slots ya reservados en el mes de la fecha).
+      - Para cada franja (M/T):
+          * Ordena solicitudes por (usos_mes asc, random).
+          * Asigna plazas hasta donde alcance.
+          * Marca pre_reservas como ASIGNADO / RECHAZADO.
+          * Actualiza slots (reservado_por, es_sorteo = true).
+    """
+    rest_url, headers, _ = get_rest_info()
+    fecha_str = fecha_obj.isoformat()
+
+    # 1) Slots cedidos y libres de esa fecha
+    try:
+        resp_slots = requests.get(
+            f"{rest_url}/slots",
+            headers=headers,
+            params={
+                "select": "id,fecha,franja,plaza_id,owner_usa,reservado_por",
+                "fecha": f"eq.{fecha_str}",
+                "owner_usa": "eq.false",
+                "reservado_por": "is.null",
+            },
+            timeout=10,
+        )
+        slots_libres = resp_slots.json() if resp_slots.status_code == 200 else []
+    except Exception as e:
+        st.error("No se han podido leer los slots cedidos para el sorteo.")
+        st.code(str(e))
+        return
+
+    if not slots_libres:
+        st.info("No hay plazas cedidas y libres para esa fecha. No hay nada que sortear.")
+        return
+
+    # 2) Pre-reservas PENDIENTE para esa fecha
+    try:
+        resp_pre = requests.get(
+            f"{rest_url}/pre_reservas",
+            headers=headers,
+            params={
+                "select": "id,usuario_id,franja,estado",
+                "fecha": f"eq.{fecha_str}",
+                "estado": "eq.PENDIENTE",
+            },
+            timeout=10,
+        )
+        pre_pendientes = resp_pre.json() if resp_pre.status_code == 200 else []
+    except Exception as e:
+        st.error("No se han podido leer las pre-reservas para el sorteo.")
+        st.code(str(e))
+        return
+
+    if not pre_pendientes:
+        st.info("No hay pre-reservas pendientes para esa fecha. No hay nada que sortear.")
+        return
+
+    # 3) Contar usos mensuales por usuario (slots reservados en el mes de la fecha)
+    first_day = fecha_obj.replace(day=1)
+    if fecha_obj.month == 12:
+        next_month_first = date(fecha_obj.year + 1, 1, 1)
+    else:
+        next_month_first = date(fecha_obj.year, fecha_obj.month + 1, 1)
+
+    try:
+        resp_usos = requests.get(
+            f"{rest_url}/slots",
+            headers=headers,
+            params={
+                "select": "fecha,reservado_por",
+                "fecha": f"gte.{first_day.isoformat()}",
+            },
+            timeout=10,
+        )
+        slots_mes_raw = resp_usos.json() if resp_usos.status_code == 200 else []
+    except Exception as e:
+        st.error("No se han podido leer los usos del mes para el sorteo.")
+        st.code(str(e))
+        return
+
+    usos_mes = {}
+    for s in slots_mes_raw:
+        try:
+            if s["reservado_por"] is None:
+                continue
+            fecha_slot = date.fromisoformat(s["fecha"][:10])
+            if not (first_day <= fecha_slot < next_month_first):
+                continue
+            uid = s["reservado_por"]
+            usos_mes[uid] = usos_mes.get(uid, 0) + 1
+        except Exception:
+            continue
+
+    # 4) Agrupamos plazas libres y solicitudes por franja
+    from collections import defaultdict
+
+    plazas_por_franja = defaultdict(list)   # franja -> [plaza_id,...]
+    for sl in slots_libres:
+        fr = sl["franja"]
+        plazas_por_franja[fr].append(sl["plaza_id"])
+
+    pre_por_franja = defaultdict(list)      # franja -> [pre_reserva_row,...]
+    for pr in pre_pendientes:
+        pre_por_franja[pr["franja"]].append(pr)
+
+    asignados_total = 0
+    rechazados_total = 0
+
+    # 5) Sorteo por franja
+    for franja in ["M", "T"]:
+        plazas = plazas_por_franja.get(franja, [])
+        solicitudes = pre_por_franja.get(franja, [])
+
+        if not plazas or not solicitudes:
+            # Si no hay plazas o no hay solicitudes, nada que hacer en esta franja
+            continue
+
+        # Ordenamos solicitudes por (usos_mes asc, random)
+        def clave_orden(pr):
+            uid = pr["usuario_id"]
+            usos = usos_mes.get(uid, 0)
+            return (usos, random.random())
+
+        solicitudes_ordenadas = sorted(solicitudes, key=clave_orden)
+
+        num_asignables = min(len(plazas), len(solicitudes_ordenadas))
+        ganadores = solicitudes_ordenadas[:num_asignables]
+        perdedores = solicitudes_ordenadas[num_asignables:]
+
+        # 5.1 Asignar plazas a ganadores: actualizamos slots
+        try:
+            local_headers = headers.copy()
+            local_headers["Prefer"] = "resolution=merge-duplicates"
+
+            for i, pr in enumerate(ganadores):
+                uid = pr["usuario_id"]
+                plaza_id = plazas[i]
+
+                payload = [{
+                    "fecha": fecha_str,
+                    "plaza_id": plaza_id,
+                    "franja": franja,
+                    "owner_usa": False,
+                    "reservado_por": uid,
+                    "es_sorteo": True,
+                    "estado": "CONFIRMADO",
+                }]
+
+                r = requests.post(
+                    f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                    headers=local_headers,
+                    json=payload,
+                    timeout=10,
+                )
+                if r.status_code >= 400:
+                    st.error("Error al asignar una plaza en el sorteo.")
+                    st.code(r.text)
+                    return
+
+        except Exception as e:
+            st.error("Ha ocurrido un error al asignar las plazas del sorteo.")
+            st.code(str(e))
+            return
+
+        # 5.2 Actualizar estados de pre_reservas: ASIGNADO / RECHAZADO
+        try:
+            # Ganadores
+            if ganadores:
+                ids_ganadores = ",".join([g["id"] for g in ganadores])
+                resp_patch_win = requests.patch(
+                    f"{rest_url}/pre_reservas",
+                    headers=headers,
+                    params={
+                        "id": f"in.({ids_ganadores})",
+                    },
+                    json={"estado": "ASIGNADO"},
+                    timeout=10,
+                )
+                if resp_patch_win.status_code >= 400:
+                    st.error("Error al marcar pre-reservas como ASIGNADO.")
+                    st.code(resp_patch_win.text)
+                    return
+
+            # Perdedores
+            if perdedores:
+                ids_perdedores = ",".join([p["id"] for p in perdedores])
+                resp_patch_lose = requests.patch(
+                    f"{rest_url}/pre_reservas",
+                    headers=headers,
+                    params={
+                        "id": f"in.({ids_perdedores})",
+                    },
+                    json={"estado": "RECHAZADO"},
+                    timeout=10,
+                )
+                if resp_patch_lose.status_code >= 400:
+                    st.error("Error al marcar pre-reservas como RECHAZADO.")
+                    st.code(resp_patch_lose.text)
+                    return
+
+        except Exception as e:
+            st.error("Ha ocurrido un error al actualizar el estado de las pre-reservas.")
+            st.code(str(e))
+            return
+
+        asignados_total += len(ganadores)
+        rechazados_total += len(perdedores)
+
+    st.success(
+        f"Sorteo ejecutado para el {fecha_obj.strftime('%d/%m/%Y')}: "
+        f"{asignados_total} solicitudes ASIGNADAS, {rechazados_total} RECHAZADAS."
+    )
+
+
+def cancelar_sorteo(fecha_obj: date):
+    """
+    Revierte un sorteo ejecutado para una fecha:
+      - Pone en PENDIENTE las pre_reservas con estado ASIGNADO/RECHAZADO para esa fecha.
+      - Limpia en slots las reservas creadas por sorteo (es_sorteo = true).
+    """
+    rest_url, headers, _ = get_rest_info()
+    fecha_str = fecha_obj.isoformat()
+
+    # 1) Volver a PENDIENTE las pre_reservas ASIGNADO / RECHAZADO
+    try:
+        resp_patch_pre = requests.patch(
+            f"{rest_url}/pre_reservas",
+            headers=headers,
+            params={
+                "fecha": f"eq.{fecha_str}",
+                "estado": "in.(ASIGNADO,RECHAZADO)",
+            },
+            json={"estado": "PENDIENTE"},
+            timeout=10,
+        )
+        if resp_patch_pre.status_code >= 400:
+            st.error("Error al revertir el estado de pre-reservas en cancelar sorteo.")
+            st.code(resp_patch_pre.text)
+            return
+    except Exception as e:
+        st.error("No se han podido actualizar las pre-reservas al cancelar el sorteo.")
+        st.code(str(e))
+        return
+
+    # 2) Quitar reservas creadas por sorteo en slots (es_sorteo = true)
+    try:
+        resp_patch_slots = requests.patch(
+            f"{rest_url}/slots",
+            headers=headers,
+            params={
+                "fecha": f"eq.{fecha_str}",
+                "es_sorteo": "eq.true",
+            },
+            json={
+                "reservado_por": None,
+                "es_sorteo": False,
+            },
+            timeout=10,
+        )
+        if resp_patch_slots.status_code >= 400:
+            st.error("Error al limpiar los slots del sorteo al cancelar.")
+            st.code(resp_patch_slots.text)
+            return
+    except Exception as e:
+        st.error("No se han podido limpiar los slots al cancelar el sorteo.")
+        st.code(str(e))
+        return
+
+    st.success(
+        f"Sorteo CANCELADO para el {fecha_obj.strftime('%d/%m/%Y')}. "
+        "Todas las solicitudes vuelven a estar PENDIENTES y las plazas liberadas."
+    )
+
+# ---------------------------------------------
 # LOGIN via SUPABASE AUTH
 # ---------------------------------------------
 def login(email, password, anon_key):
