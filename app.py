@@ -665,18 +665,30 @@ def view_suplente(profile):
         st.code(str(e))
         upcoming_raw = []
 
-    proximas = []
-    for r in upcoming_raw:
-        try:
-            fecha_str = r["fecha"][:10]
-            f = date.fromisoformat(fecha_str)
-            franja_txt = "Mañana" if r["franja"] == "M" else "Tarde"
-            plaza_id = r["plaza_id"]
-            proximas.append(
-                f"- {f.strftime('%a %d/%m')} – {franja_txt} – Plaza **P-{plaza_id}**"
+proximas = []
+for r in upcoming_raw:
+    try:
+        fecha_str = r["fecha"][:10]
+        f = date.fromisoformat(fecha_str)
+        franja_txt = "Mañana" if r["franja"] == "M" else "Tarde"
+        plaza_id = r["plaza_id"]
+
+        if f == hoy:
+            # Hoy sí mostramos la plaza concreta
+            linea = (
+                f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
+                f"Plaza **P-{plaza_id}**"
             )
-        except Exception:
-            continue
+        else:
+            # Futuro: solicitud pendiente, sin plaza aún para el usuario
+            linea = (
+                f"- {f.strftime('%a %d/%m')} – {franja_txt} – "
+                "_Solicitud pendiente_"
+            )
+
+        proximas.append(linea)
+    except Exception:
+        continue
 
     st.markdown("### 🔜 Tus próximas reservas")
     if proximas:
@@ -758,27 +770,32 @@ def view_suplente(profile):
     cancel_seleccionada = None
 
     # Pintamos la semana
-    for d in dias_semana:
-        cols = st.columns(3)
-        cols[0].write(d.strftime("%a %d/%m"))
+for d in dias_semana:
+    cols = st.columns(3)
+    cols[0].write(d.strftime("%a %d/%m"))
 
-        for idx, franja in enumerate(["M", "T"], start=1):
+    for idx, franja in enumerate(["M", "T"], start=1):
 
-            # ¿Este usuario ya ha reservado esta franja?
-            if (d, franja) in reservas_usuario:
-                plaza_id = reservas_usuario[(d, franja)]
+        # ¿Este usuario ya ha reservado / solicitado esta franja?
+        if (d, franja) in reservas_usuario:
+            plaza_id = reservas_usuario[(d, franja)]
 
-                # HOY = reserva definitiva; FUTURO = solicitud pendiente de sorteo
-                texto_estado = "Has reservado" if d == hoy else "Has solicitado"
-
+            if d == hoy:
+                # HOY: reserva firme, con plaza concreta
                 cols[idx].markdown(
-                    f"✅ {texto_estado}\n**P-{plaza_id}**"
+                    f"✅ Has reservado\n**P-{plaza_id}**"
+                )
+            else:
+                # FUTURO: solicitud pendiente de sorteo, sin mostrar plaza
+                cols[idx].markdown(
+                    "✅ Has solicitado\n_Plaza_"
                 )
 
-                if cols[idx].button("Cancelar", key=f"cancel_{d.isoformat()}_{franja}"):
-                    cancel_seleccionada = (d, franja, plaza_id)
+            if cols[idx].button("Cancelar", key=f"cancel_{d.isoformat()}_{franja}"):
+                cancel_seleccionada = (d, franja, plaza_id)
 
-                continue
+            continue
+
 
         # aquí sigue tu lógica de "No disponible", botones de reservar, etc.
             
