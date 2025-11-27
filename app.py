@@ -458,10 +458,31 @@ def view_titular(profile):
     st.write(f"Tu plaza asignada: **P-{plaza_id}**")
     st.markdown("Marca qué franjas **cedes** tu plaza esta semana (lunes a viernes):")
 
+    # Helper: ¿puede el titular modificar la cesión en esa fecha?
+    def se_puede_modificar_cesion(fecha_slot: date) -> bool:
+        """
+        Reglas titular:
+          - HOY: no puede cambiar nada
+          - MAÑANA: solo antes de las 20:00
+          - FUTURO (pasado mañana): siempre puede
+        """
+        hoy = date.today()
+        ahora = datetime.now().time()
+        limite = time(20, 0)
+
+        if fecha_slot == hoy:
+            return False
+
+        if fecha_slot == hoy + timedelta(days=1) and ahora >= limite:
+            return False
+
+        return True
+
     # Semana actual (lunes a viernes)
     hoy = date.today()
     lunes = hoy - timedelta(days=hoy.weekday())  # 0 = lunes
     all_dias_semana = [lunes + timedelta(days=i) for i in range(5)]  # lun–vie
+    # Solo mostramos HOY y días futuros
     dias_semana = [d for d in all_dias_semana if d >= hoy]
 
     rest_url, headers, _ = get_rest_info()
@@ -498,7 +519,8 @@ def view_titular(profile):
             reservas[(f, franja)] = s["reservado_por"]
         except Exception:
             continue
-        # ---------------------------
+
+    # ---------------------------
     # Agenda del titular (resumen semana)
     # ---------------------------
     filas_agenda = []
@@ -520,7 +542,6 @@ def view_titular(profile):
         filas_agenda.append(fila)
 
     st.markdown("### Tu agenda esta semana")
-    import pandas as pd
     df_agenda = pd.DataFrame(filas_agenda)
     st.table(df_agenda)
 
@@ -531,7 +552,7 @@ def view_titular(profile):
     header_cols[1].markdown("**Mañana**")
     header_cols[2].markdown("**Tarde**")
 
-    # Solo guardaremos decisiones en franjas NO reservadas
+    # Solo guardaremos decisiones en franjas editables (sin reserva y dentro de ventana horaria)
     cedencias = {}
 
     for d in dias_semana:
@@ -540,16 +561,27 @@ def view_titular(profile):
 
         for idx, franja in enumerate(["M", "T"], start=1):
             owner_usa = estado.get((d, franja), True)
-            cedida_por_defecto = not owner_usa  # si no la usa, es que la cedió
             reservado_por = reservas.get((d, franja))
 
+            # Si ya hay un suplente reservado: el titular NO puede tocarlo
             if reservado_por is not None:
-                # Ya hay un suplente reservado: el titular NO puede tocarlo
                 cols[idx].markdown("✅ Cedida (reservada)")
                 continue
 
-            # Franja sin reserva: el titular puede marcar/desmarcar "Cedo"
+            # ¿Está dentro de la ventana en la que el titular puede modificar?
+            editable = se_puede_modificar_cesion(d)
+
+            texto_base = "Titular usa" if owner_usa else "Cedida (libre)"
+
+            if not editable:
+                # Fuera de ventana: solo mostramos el estado, sin checkbox
+                cols[idx].markdown(texto_base)
+                continue
+
+            # Dentro de ventana: el titular puede marcar/desmarcar "Cedo"
             key = f"cede_{d.isoformat()}_{franja}"
+            cedida_por_defecto = not owner_usa  # si no la usa, es que la cedió
+
             cedida = cols[idx].checkbox(
                 "Cedo",
                 value=cedida_por_defecto,
@@ -561,6 +593,10 @@ def view_titular(profile):
     if st.button("Guardar cambios de la semana"):
         try:
             for (d, franja), cedida in cedencias.items():
+                # Por seguridad, volvemos a comprobar ventana de edición
+                if not se_puede_modificar_cesion(d):
+                    continue
+
                 owner_usa = not cedida  # si la cedo, yo no la uso
 
                 payload = [{
