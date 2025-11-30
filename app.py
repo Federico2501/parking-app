@@ -766,7 +766,7 @@ def view_admin(profile):
     filas = []
     for s in sorted(slots, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
         fecha = s["fecha"]
-        franja = "Mañana" if s["franja"] == "M" else "Tarde"
+        franja = "08 - 14" if s["franja"] == "M" else "14 - 20"
         plaza_id = s["plaza_id"]
         owner_usa = s["owner_usa"]
         reservado_por = s["reservado_por"]
@@ -1213,8 +1213,8 @@ def view_titular(profile):
 
     header_cols = st.columns(4)
     header_cols[0].markdown("**Día**")
-    header_cols[1].markdown("**Mañana**")
-    header_cols[2].markdown("**Tarde**")
+    header_cols[1].markdown("**08 - 14**")
+    header_cols[2].markdown("**14 - 20**")
     header_cols[3].markdown("**Día completo**")
 
     cedencias = {}
@@ -1462,7 +1462,7 @@ def view_suplente(profile):
     else:
         out = []
         for (f, franja) in claves:
-            franja_txt = "Mañana" if franja == "M" else "Tarde"
+            franja_txt = "08 - 14" if franja == "M" else "14 - 20"
             fecha_txt = f.strftime("%a %d/%m")
 
             if (f, franja) in slots_user:
@@ -1574,8 +1574,8 @@ def view_suplente(profile):
 
     header_cols = st.columns(4)
     header_cols[0].markdown("**Día**")
-    header_cols[1].markdown("**Mañana**")
-    header_cols[2].markdown("**Tarde**")
+    header_cols[1].markdown("**08 - 14**")
+    header_cols[2].markdown("**14 - 20**")
     header_cols[3].markdown("**Día completo**")
 
     reserva_click = None
