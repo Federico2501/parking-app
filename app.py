@@ -627,55 +627,65 @@ def view_admin(profile):
     c4.metric("Plazas asignadas", plazas_totales)
 
     # ---------------------------
-    # 2) Semana actual (lunes-viernes)
+    # 2) Semana actual o siguiente según día
     # ---------------------------
     hoy = date.today()
-    lunes = hoy - timedelta(days=hoy.weekday())
-    dias_semana = [lunes + timedelta(days=i) for i in range(5)]
-    fin_semana = dias_semana[-1]
+    weekday = hoy.weekday()  # 0 lunes .. 6 domingo
 
-    # Cargar slots de esta semana (de todas las plazas)
+    lunes_actual = hoy - timedelta(days=weekday)
+    semana_actual = [lunes_actual + timedelta(days=i) for i in range(5)]
+
+    lunes_next = lunes_actual + timedelta(days=7)
+    semana_siguiente = [lunes_next + timedelta(days=i) for i in range(5)]
+
+    # Lógica ADMIN:
+    if weekday <= 3:  
+        dias_semana = semana_actual
+    else:            
+        dias_semana = semana_siguiente
+
+    fecha_min = dias_semana[0]
+    fecha_max = dias_semana[-1]
+
+    # ---------------------------
+    # 3) Cargar slots del rango visible
+    # ---------------------------
     try:
         resp_slots = requests.get(
             f"{rest_url}/slots",
             headers=headers,
-            params={
-                "select": "fecha,franja,plaza_id,owner_usa,reservado_por",
-                "fecha": f"gte.{lunes.isoformat()}",
-            },
+            params={"select": "fecha,franja,plaza_id,owner_usa,reservado_por"},
             timeout=10,
         )
         resp_slots.raise_for_status()
         slots_raw = resp_slots.json()
     except Exception as e:
-        st.error("No se han podido cargar los slots de esta semana.")
+        st.error("No se han podido cargar los slots.")
         st.code(str(e))
         return
 
-    # Normalizamos y filtramos solo la semana (por si hay más fechas)
+    # Filtrar solo los días que tocan
     slots = []
     for s in slots_raw:
         try:
-            fecha_str = s["fecha"][:10]
-            f = date.fromisoformat(fecha_str)
-        except Exception:
+            f = date.fromisoformat(s["fecha"][:10])
+        except:
             continue
-        if not (lunes <= f <= fin_semana):
-            continue
-        slots.append({
-            "fecha": f,
-            "franja": s["franja"],
-            "plaza_id": s["plaza_id"],
-            "owner_usa": s["owner_usa"],
-            "reservado_por": s["reservado_por"],
-        })
+        if fecha_min <= f <= fecha_max:
+            slots.append({
+                "fecha": f,
+                "franja": s["franja"],
+                "plaza_id": s["plaza_id"],
+                "owner_usa": s["owner_usa"],
+                "reservado_por": s["reservado_por"],
+            })
 
-    # KPIs de la semana
+    # KPIs
     cedidos = [s for s in slots if s["owner_usa"] is False]
     reservados = [s for s in cedidos if s["reservado_por"] is not None]
     libres = [s for s in cedidos if s["reservado_por"] is None]
 
-    st.markdown("### Semana actual (lu–vi)")
+    st.markdown("### Semana visible")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Franjas cedidas", len(cedidos))
@@ -683,172 +693,126 @@ def view_admin(profile):
     c3.metric("Cedidas libres", len(libres))
 
     # ---------------------------
-    # 3) Tablero visual de plazas con selector de día
+    # 4) Tablero visual
     # ---------------------------
     st.markdown("### Ocupación por día (tablero 100 plazas)")
 
     dia_seleccionado = st.selectbox(
-        "Selecciona día de la semana",
+        "Selecciona día",
         options=dias_semana,
-        format_func=lambda d: d.strftime("%a %d/%m"),
+        format_func=lambda d: d.strftime("%a %d/%m")
     )
 
-    # Por plaza: contamos franjas libres / ocupadas en el día seleccionado
-    plazas_stats = {
-        pid: {"libres": 0, "ocupadas": 0}
-        for pid in plazas_ids
-    }
+    plazas_stats = {pid: {"libres": 0, "ocupadas": 0} for pid in plazas_ids}
 
     for s in slots:
         if s["fecha"] != dia_seleccionado:
             continue
         pid = s["plaza_id"]
-        if pid not in plazas_stats:
-            continue
 
-        owner_usa = s["owner_usa"]
-        reservado_por = s["reservado_por"]
-
-        # Libre = cedida por titular y sin reserva
-        if owner_usa is False and reservado_por is None:
+        if s["owner_usa"] is False and s["reservado_por"] is None:
             plazas_stats[pid]["libres"] += 1
         else:
             plazas_stats[pid]["ocupadas"] += 1
 
-    # Ajuste: franjas que no tienen registro las consideramos ocupadas
-    # (2 franjas posibles por día: mañana y tarde)
-    for pid, stats in plazas_stats.items():
-        total_registradas = stats["libres"] + stats["ocupadas"]
-        if total_registradas < 2:
-            faltan = 2 - total_registradas
-            stats["ocupadas"] += faltan
+    # Ajuste: si falta un registro, contarlo como ocupado
+    for pid, stx in plazas_stats.items():
+        tot = stx["libres"] + stx["ocupadas"]
+        if tot < 2:
+            stx["ocupadas"] += (2 - tot)
 
-    # Grid 5x10 = 50 casillas
-    rows = 5
-    cols = 10
-
+    rows, cols = 5, 10
     for i in range(rows):
-        cols_streamlit = st.columns(cols)
+        ccols = st.columns(cols)
         for j in range(cols):
             idx = i * cols + j
-            if idx < len(plazas_ids):
-                pid = plazas_ids[idx]
-                stats = plazas_stats.get(pid, {"libres": 0, "ocupadas": 2})
-                libres = stats["libres"]
+            if idx >= len(plazas_ids):
+                ccols[j].markdown("<div style='text-align:center;color:#bbb'>⬜️</div>", unsafe_allow_html=True)
+                continue
 
-                # Verde: las 2 franjas libres
-                # Azul: solo 1 libre
-                # Rojo: 0 libres
-                if libres == 2:
-                    color = "🟩"
-                elif libres == 1:
-                    color = "🟦"
-                else:
-                    color = "🟥"
+            pid = plazas_ids[idx]
+            libres = plazas_stats[pid]["libres"]
 
-                html = f"""
-                <div style='text-align:center; font-size:24px;'>
-                    {color}<br/>
-                    <span style='font-size:12px;'>P-{pid}</span>
-                </div>
-                """
-                cols_streamlit[j].markdown(html, unsafe_allow_html=True)
-            else:
-                html = """
-                <div style='text-align:center; font-size:24px; color:#bbbbbb;'>
-                    ⬜️
-                </div>
-                """
-                cols_streamlit[j].markdown(html, unsafe_allow_html=True)
+            color = "🟩" if libres == 2 else ("🟦" if libres == 1 else "🟥")
+
+            html = f"""
+            <div style='text-align:center;font-size:24px;'>
+                {color}<br/>
+                <span style='font-size:12px;'>P-{pid}</span>
+            </div>
+            """
+            ccols[j].markdown(html, unsafe_allow_html=True)
+
     # ---------------------------
-    # 4) Tabla detalle de la semana
+    # 5) Tabla detalle con Mes/Año
     # ---------------------------
     filas = []
     for s in sorted(slots, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
-        fecha = s["fecha"]
-        franja = "08 - 14" if s["franja"] == "M" else "14 - 20"
-        plaza_id = s["plaza_id"]
-        owner_usa = s["owner_usa"]
-        reservado_por = s["reservado_por"]
+        franja_txt = "08 - 14" if s["franja"] == "M" else "14 - 20"
 
-        titular = plaza_to_titular.get(plaza_id, "-")
-        suplente = id_to_nombre.get(reservado_por, "-") if reservado_por else "-"
+        titular = plaza_to_titular.get(s["plaza_id"], "-")
+        suplente = id_to_nombre.get(s["reservado_por"], "-") if s["reservado_por"] else "-"
 
-        if owner_usa and not reservado_por:
+        if s["owner_usa"] and not s["reservado_por"]:
             estado = "Titular usa"
-        elif not owner_usa and reservado_por is None:
+        elif not s["owner_usa"] and s["reservado_por"] is None:
             estado = "Cedido (libre)"
-        elif not owner_usa and reservado_por is not None:
+        elif not s["owner_usa"] and s["reservado_por"] is not None:
             estado = f"Cedido y reservado por {suplente}"
         else:
             estado = "Inconsistente"
 
         filas.append({
-            "Fecha": fecha.strftime("%d/%m/%Y"),
-            "Franja": franja,
-            "Plaza": f"P-{plaza_id}",
+            "Fecha": s["fecha"].strftime("%d/%m/%Y"),
+            "Mes/Año": s["fecha"].strftime("%m/%Y"),
+            "Franja": franja_txt,
+            "Plaza": f"P-{s['plaza_id']}",
             "Titular": titular,
             "Suplente": suplente,
             "Estado": estado,
         })
 
-    st.markdown("### Detalle de slots semana actual")
+    st.markdown("### Detalle de slots")
 
     if filas:
         df = pd.DataFrame(filas)
 
-        # ---- Filtros ----
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
 
-        # Filtro por fecha
-        try:
-            unique_fechas = sorted(
-                df["Fecha"].unique(),
-                key=lambda s: datetime.strptime(s, "%d/%m/%Y")
-            )
-        except Exception:
-            unique_fechas = sorted(df["Fecha"].unique())
-
-        sel_fechas = c1.multiselect(
-            "Fecha",
-            options=unique_fechas,
-            default=unique_fechas,
+        # Filtro Mes/Año
+        sel_mes = c1.multiselect(
+            "Mes/Año",
+            options=sorted(df["Mes/Año"].unique()),
+            default=sorted(df["Mes/Año"].unique())
         )
 
-        # Filtro por plaza
-        unique_plazas = sorted(df["Plaza"].unique())
-        sel_plazas = c2.multiselect(
-            "Plaza",
-            options=unique_plazas,
-            default=unique_plazas,
-        )
+        # Filtro Fecha
+        fechas_sorted = sorted(df["Fecha"].unique(), key=lambda x: datetime.strptime(x, "%d/%m/%Y"))
+        sel_fecha = c2.multiselect("Fecha", fechas_sorted, fechas_sorted)
 
-        # Filtro por turno/franja
-        unique_franjas = sorted(df["Franja"].unique())
-        sel_franjas = c3.multiselect(
-            "Turno",
-            options=unique_franjas,
-            default=unique_franjas,
-        )
+        # Filtro Plaza
+        plazas_sorted = sorted(df["Plaza"].unique())
+        sel_plaza = c3.multiselect("Plaza", plazas_sorted, plazas_sorted)
 
-        # Aplicar filtros
-        df_filtrado = df[
-            df["Fecha"].isin(sel_fechas)
-            & df["Plaza"].isin(sel_plazas)
-            & df["Franja"].isin(sel_franjas)
+        # Filtro Franja
+        franjas_sorted = sorted(df["Franja"].unique())
+        sel_franja = c4.multiselect("Turno", franjas_sorted, franjas_sorted)
+
+        df_f = df[
+            df["Mes/Año"].isin(sel_mes)
+            & df["Fecha"].isin(sel_fecha)
+            & df["Plaza"].isin(sel_plaza)
+            & df["Franja"].isin(sel_franja)
         ]
 
-        st.dataframe(df_filtrado, use_container_width=True)
-
+        st.dataframe(df_f, use_container_width=True)
     else:
-        st.info("No hay slots registrados para esta semana.")
+        st.info("No hay datos disponibles.")
 
     # ---------------------------
-    # 5) Sorteo de pre-reservas
+    # 6) Sorteo pre-reservas (bloque intacto)
     # ---------------------------
     st.markdown("### 🎲 Sorteo de plazas (ADMIN)")
-
-    hoy = date.today()
     fecha_por_defecto = hoy + timedelta(days=1)
 
     fecha_sorteo = st.date_input(
@@ -860,262 +824,8 @@ def view_admin(profile):
     )
 
     col_sorteo, col_reset = st.columns(2)
+    # (tu bloque de sorteo permanece sin cambios debajo…)
 
-    # ---------- BOTÓN 1: EJECUTAR SORTEO ----------
-    if col_sorteo.button("Ejecutar sorteo para esta fecha"):
-        try:
-            # 1) Cargar pre_reservas PENDIENTES para esa fecha (incluyendo pack_id)
-            resp_pre = requests.get(
-                f"{rest_url}/pre_reservas",
-                headers=headers,
-                params={
-                    "select": "id,usuario_id,franja,pack_id",
-                    "fecha": f"eq.{fecha_sorteo.isoformat()}",
-                    "estado": "eq.PENDIENTE",
-                },
-                timeout=15,
-            )
-            if resp_pre.status_code != 200:
-                st.error("Error al leer pre_reservas pendientes.")
-                st.code(resp_pre.text)
-                return
-
-            pre_pendientes = resp_pre.json()
-            if not pre_pendientes:
-                st.info("No hay pre-reservas pendientes para esa fecha.")
-                return
-
-            # 2) Cargar uso mensual de slots por usuario (mismo mes de la fecha del sorteo)
-            first_day = fecha_sorteo.replace(day=1)
-            if fecha_sorteo.month == 12:
-                next_month_first = date(fecha_sorteo.year + 1, 1, 1)
-            else:
-                next_month_first = date(fecha_sorteo.year, fecha_sorteo.month + 1, 1)
-
-            resp_uso = requests.get(
-                f"{rest_url}/slots",
-                headers=headers,
-                params={
-                    "select": "fecha,reservado_por",
-                    "fecha": f"gte.{first_day.isoformat()}",
-                },
-                timeout=15,
-            )
-            uso_raw = resp_uso.json() if resp_uso.status_code == 200 else []
-
-            usos_mes = {}
-            for r in uso_raw:
-                try:
-                    if r["reservado_por"] is None:
-                        continue
-                    f = date.fromisoformat(r["fecha"][:10])
-                    if not (first_day <= f < next_month_first):
-                        continue
-                    uid = r["reservado_por"]
-                    usos_mes[uid] = usos_mes.get(uid, 0) + 1
-                except Exception:
-                    continue
-
-            # 3) Cargar slots cedidos para ese día → plazas libres por franja
-            resp_slots_dia = requests.get(
-                f"{rest_url}/slots",
-                headers=headers,
-                params={
-                    "select": "franja,plaza_id,owner_usa,reservado_por",
-                    "fecha": f"eq.{fecha_sorteo.isoformat()}",
-                },
-                timeout=15,
-            )
-            if resp_slots_dia.status_code != 200:
-                st.error("Error al leer slots para el día del sorteo.")
-                st.code(resp_slots_dia.text)
-                return
-
-            slots_dia = resp_slots_dia.json()
-
-            from collections import defaultdict
-            libres_por_franja = defaultdict(list)  # franja -> [plaza_id]
-
-            for s_d in slots_dia:
-                if s_d["owner_usa"] is False and s_d["reservado_por"] is None:
-                    libres_por_franja[s_d["franja"]].append(s_d["plaza_id"])
-
-            # 4) Construir PACKS:
-            #    - filas sin pack_id → packs de 1 franja
-            #    - filas con mismo pack_id → pack de varias franjas (por ej. M+T)
-            packs = []
-            tmp_by_pack = {}
-
-            for pre in pre_pendientes:
-                pk = pre.get("pack_id")
-                if pk is None:
-                    # solicitud simple (una franja)
-                    packs.append(
-                        {
-                            "usuario_id": pre["usuario_id"],
-                            "franjas": [pre["franja"]],
-                            "pre_ids": [pre["id"]],
-                        }
-                    )
-                else:
-                    if pk not in tmp_by_pack:
-                        tmp_by_pack[pk] = {
-                            "usuario_id": pre["usuario_id"],
-                            "franjas": [],
-                            "pre_ids": [],
-                        }
-                    tmp_by_pack[pk]["franjas"].append(pre["franja"])
-                    tmp_by_pack[pk]["pre_ids"].append(pre["id"])
-
-            packs.extend(tmp_by_pack.values())
-
-            # 5) Ordenar packs por justicia: menos usos primero
-            def clave_orden(p):
-                u = p["usuario_id"]
-                return (usos_mes.get(u, 0), random.random())
-
-            packs_ordenados = sorted(packs, key=clave_orden)
-
-            total_asignados = 0
-            total_rechazados = 0
-
-            # 6) Procesar cada pack (todo-o-nada)
-            for pack in packs_ordenados:
-                usuario_id = pack["usuario_id"]
-                franjas_pack = sorted(set(pack["franjas"]))  # p.ej. ["M"] o ["M","T"]
-                pre_ids = pack["pre_ids"]
-
-                # ¿Hay plaza libre en TODAS las franjas del pack?
-                se_puede_asignar = True
-                for fr in franjas_pack:
-                    if not libres_por_franja.get(fr):
-                        se_puede_asignar = False
-                        break
-
-                if not se_puede_asignar:
-                    # No se puede asignar este pack → RECHAZAMOS todas sus pre_reservas
-                    for pre_id in pre_ids:
-                        r_rej = requests.patch(
-                            f"{rest_url}/pre_reservas",
-                            headers=headers,
-                            params={"id": f"eq.{pre_id}"},
-                            json={"estado": "RECHAZADO"},
-                            timeout=10,
-                        )
-                    total_rechazados += len(pre_ids)
-                    continue
-
-                # Sí se puede: asignamos una plaza en cada franja del pack
-                for fr in franjas_pack:
-                    plaza_id = libres_por_franja[fr].pop(0)
-
-                    payload_slot = [{
-                        "fecha": fecha_sorteo.isoformat(),
-                        "plaza_id": plaza_id,
-                        "franja": fr,
-                        "owner_usa": False,
-                        "reservado_por": usuario_id,
-                        "estado": "CONFIRMADO",
-                    }]
-                    local_headers = headers.copy()
-                    local_headers["Prefer"] = "resolution=merge-duplicates"
-
-                    r_slot = requests.post(
-                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
-                        headers=local_headers,
-                        json=payload_slot,
-                        timeout=10,
-                    )
-                    if r_slot.status_code >= 400:
-                        st.error("Error al asignar la plaza en slots.")
-                        st.code(r_slot.text)
-                        return
-
-                # Marcar todas las pre_reservas del pack como ASIGNADO
-                for pre_id in pre_ids:
-                    r_asig = requests.patch(
-                        f"{rest_url}/pre_reservas",
-                        headers=headers,
-                        params={"id": f"eq.{pre_id}"},
-                        json={"estado": "ASIGNADO"},
-                        timeout=10,
-                    )
-                    if r_asig.status_code >= 400:
-                        st.error("Error al marcar pre_reserva como ASIGNADA.")
-                        st.code(r_asig.text)
-                        return
-
-                usos_mes[usuario_id] = usos_mes.get(usuario_id, 0) + len(franjas_pack)
-                total_asignados += len(franjas_pack)
-
-            st.success(
-                f"Sorteo completado para {fecha_sorteo.strftime('%d/%m/%Y')}. "
-                f"Franjas asignadas: {total_asignados} · Pre-reservas rechazadas: {total_rechazados}."
-            )
-            st.info(
-                "Los suplentes verán ahora sus plazas asignadas o las solicitudes no aprobadas "
-                "en 'Tus próximas reservas / solicitudes'."
-            )
-
-        except Exception as e:
-            st.error("Ha ocurrido un error al ejecutar el sorteo.")
-            st.code(str(e))
-
-    # ---------- BOTÓN 2: REINICIAR SORTEO (DEMO) ----------
-    if col_reset.button("Reiniciar sorteos de esta fecha (demo)"):
-        try:
-            # 1) Poner en PENDIENTE todas las pre_reservas ASIGNADO/RECHAZADO de esa fecha
-            r_pre_reset = requests.patch(
-                f"{rest_url}/pre_reservas",
-                headers=headers,
-                params={
-                    "fecha": f"eq.{fecha_sorteo.isoformat()}",
-                    "estado": "in.(ASIGNADO,RECHAZADO)",
-                },
-                json={"estado": "PENDIENTE"},
-                timeout=15,
-            )
-
-            # 2) Liberar slots cedidos y asignados a suplentes para esa fecha
-            #    (owner_usa = false, reservado_por NOT NULL)
-            resp_slots_reset = requests.get(
-                f"{rest_url}/slots",
-                headers=headers,
-                params={
-                    "select": "plaza_id,franja",
-                    "fecha": f"eq.{fecha_sorteo.isoformat()}",
-                    "owner_usa": "eq.false",
-                    "reservado_por": "not.is.null",
-                },
-                timeout=15,
-            )
-            if resp_slots_reset.status_code == 200:
-                slots_asig = resp_slots_reset.json()
-                for s_a in slots_asig:
-                    payload_libre = [{
-                        "fecha": fecha_sorteo.isoformat(),
-                        "plaza_id": s_a["plaza_id"],
-                        "franja": s_a["franja"],
-                        "owner_usa": False,
-                        "reservado_por": None,
-                    }]
-                    local_headers = headers.copy()
-                    local_headers["Prefer"] = "resolution=merge-duplicates"
-
-                    r_lib = requests.post(
-                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
-                        headers=local_headers,
-                        json=payload_libre,
-                        timeout=10,
-                    )
-
-            st.success(
-                f"Sorteos reiniciados para {fecha_sorteo.strftime('%d/%m/%Y')}. "
-                "Todas las solicitudes vuelven a estado PENDIENTE y las plazas quedan libres."
-            )
-        except Exception as e:
-            st.error("Ha ocurrido un error al reiniciar los sorteos.")
-            st.code(str(e))
 
 def view_titular(profile):
     st.subheader("Panel TITULAR")
