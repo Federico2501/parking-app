@@ -627,7 +627,7 @@ def view_admin(profile):
     c4.metric("Plazas asignadas", plazas_totales)
 
     # ---------------------------
-    # 2) Semana actual o siguiente según día
+    # 2) Semana actual o siguiente según día (para KPIs / tablero)
     # ---------------------------
     hoy = date.today()
     weekday = hoy.weekday()  # 0 lunes .. 6 domingo
@@ -639,6 +639,8 @@ def view_admin(profile):
     semana_siguiente = [lunes_next + timedelta(days=i) for i in range(5)]
 
     # Lógica ADMIN:
+    #   - Lunes a jueves -> se muestra semana actual
+    #   - Viernes, sábado, domingo -> se muestra semana siguiente
     if weekday <= 3:  
         dias_semana = semana_actual
     else:            
@@ -648,7 +650,7 @@ def view_admin(profile):
     fecha_max = dias_semana[-1]
 
     # ---------------------------
-    # 3) Cargar slots del rango visible
+    # 3) Cargar TODOS los slots (histórico completo)
     # ---------------------------
     try:
         resp_slots = requests.get(
@@ -664,24 +666,31 @@ def view_admin(profile):
         st.code(str(e))
         return
 
-    # Filtrar solo los días que tocan
-    slots = []
+    # Normalizar TODOS los slots (histórico)
+    slots_all = []
     for s in slots_raw:
         try:
             f = date.fromisoformat(s["fecha"][:10])
-        except:
+        except Exception:
             continue
-        if fecha_min <= f <= fecha_max:
-            slots.append({
-                "fecha": f,
-                "franja": s["franja"],
-                "plaza_id": s["plaza_id"],
-                "owner_usa": s["owner_usa"],
-                "reservado_por": s["reservado_por"],
-            })
+        slots_all.append({
+            "fecha": f,
+            "franja": s["franja"],
+            "plaza_id": s["plaza_id"],
+            "owner_usa": s["owner_usa"],
+            "reservado_por": s["reservado_por"],
+        })
 
-    # KPIs
-    cedidos = [s for s in slots if s["owner_usa"] is False]
+    # Para KPIs/tablero: solo la semana visible (actual o siguiente)
+    slots_semana = [
+        s for s in slots_all
+        if fecha_min <= s["fecha"] <= fecha_max
+    ]
+
+    # ---------------------------
+    # 4) KPIs semana visible
+    # ---------------------------
+    cedidos = [s for s in slots_semana if s["owner_usa"] is False]
     reservados = [s for s in cedidos if s["reservado_por"] is not None]
     libres = [s for s in cedidos if s["reservado_por"] is None]
 
@@ -693,7 +702,7 @@ def view_admin(profile):
     c3.metric("Cedidas libres", len(libres))
 
     # ---------------------------
-    # 4) Tablero visual
+    # 5) Tablero visual (solo semana visible)
     # ---------------------------
     st.markdown("### Ocupación por día (tablero 100 plazas)")
 
@@ -705,7 +714,7 @@ def view_admin(profile):
 
     plazas_stats = {pid: {"libres": 0, "ocupadas": 0} for pid in plazas_ids}
 
-    for s in slots:
+    for s in slots_semana:
         if s["fecha"] != dia_seleccionado:
             continue
         pid = s["plaza_id"]
@@ -715,7 +724,7 @@ def view_admin(profile):
         else:
             plazas_stats[pid]["ocupadas"] += 1
 
-    # Ajuste: si falta un registro, contarlo como ocupado
+    # Ajuste: si falta un registro, contarlo como ocupado (2 franjas posibles)
     for pid, stx in plazas_stats.items():
         tot = stx["libres"] + stx["ocupadas"]
         if tot < 2:
@@ -727,7 +736,10 @@ def view_admin(profile):
         for j in range(cols):
             idx = i * cols + j
             if idx >= len(plazas_ids):
-                ccols[j].markdown("<div style='text-align:center;color:#bbb'>⬜️</div>", unsafe_allow_html=True)
+                ccols[j].markdown(
+                    "<div style='text-align:center;color:#bbb'>⬜️</div>",
+                    unsafe_allow_html=True
+                )
                 continue
 
             pid = plazas_ids[idx]
@@ -744,10 +756,13 @@ def view_admin(profile):
             ccols[j].markdown(html, unsafe_allow_html=True)
 
     # ---------------------------
-    # 5) Tabla detalle con Mes/Año
+    # 6) Tabla detalle HISTÓRICA con Mes/Año
+    #    (usa TODOS los slots, no solo la semana visible)
     # ---------------------------
+    st.markdown("### Detalle de slots")
+
     filas = []
-    for s in sorted(slots, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
+    for s in sorted(slots_all, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
         franja_txt = "08 - 14" if s["franja"] == "M" else "14 - 20"
 
         titular = plaza_to_titular.get(s["plaza_id"], "-")
@@ -772,8 +787,6 @@ def view_admin(profile):
             "Estado": estado,
         })
 
-    st.markdown("### Detalle de slots")
-
     if filas:
         df = pd.DataFrame(filas)
 
@@ -787,7 +800,10 @@ def view_admin(profile):
         )
 
         # Filtro Fecha
-        fechas_sorted = sorted(df["Fecha"].unique(), key=lambda x: datetime.strptime(x, "%d/%m/%Y"))
+        fechas_sorted = sorted(
+            df["Fecha"].unique(),
+            key=lambda x: datetime.strptime(x, "%d/%m/%Y")
+        )
         sel_fecha = c2.multiselect("Fecha", fechas_sorted, fechas_sorted)
 
         # Filtro Plaza
@@ -810,7 +826,7 @@ def view_admin(profile):
         st.info("No hay datos disponibles.")
 
     # ---------------------------
-    # 6) Sorteo pre-reservas (bloque intacto)
+    # 7) Sorteo pre-reservas (tu bloque intacto a partir de aquí)
     # ---------------------------
     st.markdown("### 🎲 Sorteo de plazas (ADMIN)")
     fecha_por_defecto = hoy + timedelta(days=1)
@@ -824,7 +840,8 @@ def view_admin(profile):
     )
 
     col_sorteo, col_reset = st.columns(2)
-    # (tu bloque de sorteo permanece sin cambios debajo…)
+    # A partir de aquí mantienes exactamente tu lógica actual de sorteo
+
 
 
 def view_titular(profile):
