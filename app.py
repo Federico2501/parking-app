@@ -1345,9 +1345,14 @@ def view_suplente(profile):
     # 1) KPI de uso mensual
     # ============================
     first_day = hoy.replace(day=1)
-    next_month_first = (first_day.replace(month=first_day.month % 12 + 1, year=first_day.year + (first_day.month // 12))
-                        if first_day.month == 12 else
-                        date(first_day.year, first_day.month + 1, 1))
+    next_month_first = (
+        first_day.replace(
+            month=(first_day.month % 12) + 1,
+            year=first_day.year + (first_day.month // 12),
+        )
+        if first_day.month == 12
+        else date(first_day.year, first_day.month + 1, 1)
+    )
 
     try:
         r = requests.get(
@@ -1361,7 +1366,7 @@ def view_suplente(profile):
             timeout=10,
         )
         usadas_raw = r.json()
-    except:
+    except Exception:
         usadas_raw = []
 
     usadas_mes = []
@@ -1370,7 +1375,7 @@ def view_suplente(profile):
             f = date.fromisoformat(x["fecha"][:10])
             if first_day <= f < next_month_first:
                 usadas_mes.append(f)
-        except:
+        except Exception:
             pass
 
     st.write(f"Franjas utilizadas este mes: **{len(usadas_mes)}**")
@@ -1386,12 +1391,12 @@ def view_suplente(profile):
                 "select": "fecha,franja,plaza_id",
                 "reservado_por": f"eq.{user_id}",
                 "fecha": f"gte.{hoy.isoformat()}",
-                "order": "fecha.asc,franja.asc"
+                "order": "fecha.asc,franja.asc",
             },
             timeout=10,
         )
         slots_user_raw = r.json()
-    except:
+    except Exception:
         slots_user_raw = []
 
     slots_user = {}
@@ -1399,7 +1404,7 @@ def view_suplente(profile):
         try:
             f = date.fromisoformat(s["fecha"][:10])
             slots_user[(f, s["franja"])] = s["plaza_id"]
-        except:
+        except Exception:
             pass
 
     try:
@@ -1410,12 +1415,12 @@ def view_suplente(profile):
                 "select": "fecha,franja,estado",
                 "usuario_id": f"eq.{user_id}",
                 "fecha": f"gte.{hoy.isoformat()}",
-                "order": "fecha.asc,franja.asc"
+                "order": "fecha.asc,franja.asc",
             },
             timeout=10,
         )
         pre_user_raw = r.json()
-    except:
+    except Exception:
         pre_user_raw = []
 
     pre_user = {}
@@ -1424,10 +1429,13 @@ def view_suplente(profile):
             if r["estado"] != "CANCELADO":
                 f = date.fromisoformat(r["fecha"][:10])
                 pre_user[(f, r["franja"])] = r["estado"]
-        except:
+        except Exception:
             pass
 
-    claves = sorted(set(slots_user.keys()) | set(pre_user.keys()), key=lambda x: (x[0], x[1]))
+    claves = sorted(
+        set(slots_user.keys()) | set(pre_user.keys()),
+        key=lambda x: (x[0], x[1]),
+    )
 
     st.markdown("### 🔜 Tus próximas reservas / solicitudes")
     if not claves:
@@ -1440,15 +1448,23 @@ def view_suplente(profile):
 
             if (f, franja) in slots_user:
                 plaza = slots_user[(f, franja)]
-                out.append(f"- {fecha_txt} – {fr_txt} – Plaza **P-{plaza}** (asignada)")
+                out.append(
+                    f"- {fecha_txt} – {fr_txt} – Plaza **P-{plaza}** (asignada)"
+                )
             else:
                 est = pre_user.get((f, franja), "PENDIENTE")
                 if est == "PENDIENTE":
-                    out.append(f"- {fecha_txt} – {fr_txt} – _Solicitud pendiente de plaza_")
+                    out.append(
+                        f"- {fecha_txt} – {fr_txt} – _Solicitud pendiente de plaza_"
+                    )
                 elif est == "ASIGNADO":
-                    out.append(f"- {fecha_txt} – {fr_txt} – _Plaza asignada (pendiente)_")
+                    out.append(
+                        f"- {fecha_txt} – {fr_txt} – _Plaza asignada (pendiente)_"
+                    )
                 elif est == "RECHAZADO":
-                    out.append(f"- {fecha_txt} – {fr_txt} – _Solicitud no aprobada_")
+                    out.append(
+                        f"- {fecha_txt} – {fr_txt} – _Solicitud no aprobada_"
+                    )
 
         st.markdown("\n".join(out))
 
@@ -1475,27 +1491,30 @@ def view_suplente(profile):
         return
 
     # ============================
-    # 4) Leer slots agregados
+    # 4) Leer slots agregados (todas plazas)
     # ============================
     try:
         r = requests.get(
             f"{rest_url}/slots",
             headers=headers,
-            params={"select": "fecha,franja,owner_usa,reservado_por,plaza_id"},
+            params={
+                "select": "fecha,franja,owner_usa,reservado_por,plaza_id",
+            },
             timeout=10,
         )
         slots_raw = r.json()
-    except:
+    except Exception:
         slots_raw = []
 
     from collections import defaultdict
-    libres = defaultdict(int)
-    reservas_user_sem = {}
+
+    libres = defaultdict(int)       # (fecha,franja) -> nº plazas cedidas libres
+    reservas_user_sem = {}         # (fecha,franja) -> plaza_id usuario
 
     for s in slots_raw:
         try:
             f = date.fromisoformat(s["fecha"][:10])
-        except:
+        except Exception:
             continue
 
         if f not in dias_semana:
@@ -1520,12 +1539,12 @@ def view_suplente(profile):
                 "select": "fecha,franja,estado,pack_id",
                 "usuario_id": f"eq.{user_id}",
                 "fecha": f"in.({','.join(d.isoformat() for d in dias_semana)})",
-                "order": "fecha.asc,franja.asc"
+                "order": "fecha.asc,franja.asc",
             },
             timeout=10,
         )
         pre_sem_raw = r.json()
-    except:
+    except Exception:
         pre_sem_raw = []
 
     pre_sem = {}
@@ -1538,7 +1557,7 @@ def view_suplente(profile):
                 pre_sem[(f, fr)] = row["estado"]
                 if row.get("pack_id"):
                     pack_ids[(f, fr)] = row["pack_id"]
-        except:
+        except Exception:
             pass
 
     # ============================
@@ -1557,7 +1576,12 @@ def view_suplente(profile):
 
     for d in dias_semana:
         is_today = (d == hoy)
-        bg = "background-color:rgba(0,123,255,0.08); border-radius:6px; padding:3px;" if is_today else ""
+        bg = (
+            "background-color:rgba(0,123,255,0.08); "
+            "border-radius:6px; padding:3px;"
+            if is_today
+            else ""
+        )
 
         with st.container():
             st.markdown(f"<div style='{bg}'>", unsafe_allow_html=True)
@@ -1579,8 +1603,10 @@ def view_suplente(profile):
 
             # FULL DAY pendiente
             full_pendiente = (
-                not tiene_slot_M and not tiene_slot_T and
-                pre_M == "PENDIENTE" and pre_T == "PENDIENTE"
+                not tiene_slot_M
+                and not tiene_slot_T
+                and pre_M == "PENDIENTE"
+                and pre_T == "PENDIENTE"
             )
 
             # Puede modificar este día?
@@ -1591,9 +1617,12 @@ def view_suplente(profile):
             # ----------------------------
             key_full = f"full_{d.isoformat()}"
             default_full = (
-                pre_M is not None and pre_T is not None
-                and pre_M != "RECHAZADO" and pre_T != "RECHAZADO"
-                and not tiene_slot_M and not tiene_slot_T
+                pre_M is not None
+                and pre_T is not None
+                and pre_M != "RECHAZADO"
+                and pre_T != "RECHAZADO"
+                and not tiene_slot_M
+                and not tiene_slot_T
             )
 
             if adjud_full:
@@ -1605,9 +1634,7 @@ def view_suplente(profile):
             else:
                 if editable:
                     full_checked = cols[3].checkbox(
-                        "Día completo",
-                        value=default_full,
-                        key=key_full
+                        "Día completo", value=default_full, key=key_full
                     )
                 else:
                     full_checked = default_full
@@ -1635,9 +1662,7 @@ def view_suplente(profile):
                             continue
 
                         estado_pre = pre_sem.get(key)
-                        if estado_pre == "PENDIENTE":
-                            marc = True
-                        elif estado_pre == "ASIGNADO":
+                        if estado_pre in ("PENDIENTE", "ASIGNADO"):
                             marc = True
                         else:
                             marc = False
@@ -1646,7 +1671,7 @@ def view_suplente(profile):
                             marc = col.checkbox(
                                 "Solicitar",
                                 value=marc,
-                                key=f"chk_{d.isoformat()}_{fr}"
+                                key=f"chk_{d.isoformat()}_{fr}",
                             )
                         else:
                             col.markdown("—")
@@ -1663,13 +1688,12 @@ def view_suplente(profile):
         try:
             # Recorremos DIAS y franjas
             for (d, fr) in cambios:
-
                 accion = cambios[(d, fr)]
 
                 # PACK completo (día completo)
                 if fr == "FULL":
                     if accion == "SOLICITAR":
-                        # Para simplificar, mantenemos día completo siempre como pre_reservas (también hoy)
+                        # Día completo siempre como pre_reservas (también hoy)
                         pack_id = str(uuid.uuid4())
                         payload = [
                             {
@@ -1701,10 +1725,10 @@ def view_suplente(profile):
                 esta_slot = (d, f) in reservas_user_sem
 
                 if accion == "SOLICITAR":
-                    if not esta_pre and not esta_slot:
-                        # HOY -> reserva directa en slots (si hay plaza cedida libre)
-                        if d == hoy:
-                            # Buscar una plaza libre cedida hoy en esa franja
+                    # HOY -> reserva directa en slots (si hay plaza cedida libre),
+                    # incluso aunque exista ya una pre_reserva pendiente
+                    if d == hoy:
+                        if not esta_slot:
                             resp_libre = requests.get(
                                 f"{rest_url}/slots",
                                 headers=headers,
@@ -1731,16 +1755,20 @@ def view_suplente(profile):
                                     )
                                 else:
                                     plaza_id = libres_hoy[0]["plaza_id"]
-                                    payload_slot = [{
-                                        "fecha": d.isoformat(),
-                                        "plaza_id": plaza_id,
-                                        "franja": f,
-                                        "owner_usa": False,
-                                        "reservado_por": user_id,
-                                        "estado": "CONFIRMADO",
-                                    }]
+                                    payload_slot = [
+                                        {
+                                            "fecha": d.isoformat(),
+                                            "plaza_id": plaza_id,
+                                            "franja": f,
+                                            "owner_usa": False,
+                                            "reservado_por": user_id,
+                                            "estado": "CONFIRMADO",
+                                        }
+                                    ]
                                     local_headers = headers.copy()
-                                    local_headers["Prefer"] = "resolution=merge-duplicates"
+                                    local_headers["Prefer"] = (
+                                        "resolution=merge-duplicates"
+                                    )
 
                                     r_upd = requests.post(
                                         f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
@@ -1749,16 +1777,40 @@ def view_suplente(profile):
                                         timeout=10,
                                     )
                                     if r_upd.status_code >= 400:
-                                        st.error("Supabase ha devuelto un error al reservar hoy.")
+                                        st.error(
+                                            "Supabase ha devuelto un error al reservar hoy."
+                                        )
                                         st.code(r_upd.text)
-                        else:
-                            # FUTURO -> crear pre_reserva PENDIENTE
-                            payload = [{
-                                "usuario_id": user_id,
-                                "fecha": d.isoformat(),
-                                "franja": f,
-                                "estado": "PENDIENTE",
-                            }]
+
+                                    # Si había pre_reserva PENDIENTE para hoy, marcarla como ASIGNADO
+                                    if esta_pre:
+                                        try:
+                                            requests.patch(
+                                                f"{rest_url}/pre_reservas",
+                                                headers=headers,
+                                                params={
+                                                    "usuario_id": f"eq.{user_id}",
+                                                    "fecha": f"eq.{d.isoformat()}",
+                                                    "franja": f"eq.{f}",
+                                                    "estado": "eq.PENDIENTE",
+                                                },
+                                                json={"estado": "ASIGNADO"},
+                                                timeout=10,
+                                            )
+                                        except Exception:
+                                            pass
+
+                    # FUTURO -> solo pre_reserva si no existía nada
+                    else:
+                        if not esta_pre and not esta_slot:
+                            payload = [
+                                {
+                                    "usuario_id": user_id,
+                                    "fecha": d.isoformat(),
+                                    "franja": f,
+                                    "estado": "PENDIENTE",
+                                }
+                            ]
                             requests.post(
                                 f"{rest_url}/pre_reservas",
                                 headers=headers,
@@ -1776,7 +1828,7 @@ def view_suplente(profile):
                                 "usuario_id": f"eq.{user_id}",
                                 "fecha": f"eq.{d.isoformat()}",
                                 "franja": f"eq.{f}",
-                                "estado": "in.(PENDIENTE,ASIGNADO)"
+                                "estado": "in.(PENDIENTE,ASIGNADO)",
                             },
                             json={"estado": "CANCELADO"},
                             timeout=10,
