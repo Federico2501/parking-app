@@ -1590,7 +1590,11 @@ def view_suplente(profile):
             # Día completo checkbox
             # ----------------------------
             key_full = f"full_{d.isoformat()}"
-            default_full = (pre_M is not None and pre_T is not None and pre_M != "RECHAZADO" and pre_T != "RECHAZADO" and not tiene_slot_M and not tiene_slot_T)
+            default_full = (
+                pre_M is not None and pre_T is not None
+                and pre_M != "RECHAZADO" and pre_T != "RECHAZADO"
+                and not tiene_slot_M and not tiene_slot_T
+            )
 
             if adjud_full:
                 cols[3].markdown("🟩 Día completo adjudicado")
@@ -1662,10 +1666,10 @@ def view_suplente(profile):
 
                 accion = cambios[(d, fr)]
 
-                # PACK completo
+                # PACK completo (día completo)
                 if fr == "FULL":
                     if accion == "SOLICITAR":
-                        # Crear pack_id
+                        # Para simplificar, mantenemos día completo siempre como pre_reservas (también hoy)
                         pack_id = str(uuid.uuid4())
                         payload = [
                             {
@@ -1698,19 +1702,69 @@ def view_suplente(profile):
 
                 if accion == "SOLICITAR":
                     if not esta_pre and not esta_slot:
-                        # Crear pre_reserva
-                        payload = [{
-                            "usuario_id": user_id,
-                            "fecha": d.isoformat(),
-                            "franja": f,
-                            "estado": "PENDIENTE",
-                        }]
-                        requests.post(
-                            f"{rest_url}/pre_reservas",
-                            headers=headers,
-                            json=payload,
-                            timeout=10,
-                        )
+                        # HOY -> reserva directa en slots (si hay plaza cedida libre)
+                        if d == hoy:
+                            # Buscar una plaza libre cedida hoy en esa franja
+                            resp_libre = requests.get(
+                                f"{rest_url}/slots",
+                                headers=headers,
+                                params={
+                                    "select": "plaza_id",
+                                    "fecha": f"eq.{d.isoformat()}",
+                                    "franja": f"eq.{f}",
+                                    "owner_usa": "eq.false",
+                                    "reservado_por": "is.null",
+                                    "order": "plaza_id.asc",
+                                    "limit": 1,
+                                },
+                                timeout=10,
+                            )
+                            if resp_libre.status_code != 200:
+                                st.error("Error al buscar plaza libre para hoy.")
+                                st.code(resp_libre.text)
+                            else:
+                                libres_hoy = resp_libre.json()
+                                if not libres_hoy:
+                                    st.warning(
+                                        f"No queda hueco disponible para hoy en la franja "
+                                        f"{'08-14' if f=='M' else '14-20'}."
+                                    )
+                                else:
+                                    plaza_id = libres_hoy[0]["plaza_id"]
+                                    payload_slot = [{
+                                        "fecha": d.isoformat(),
+                                        "plaza_id": plaza_id,
+                                        "franja": f,
+                                        "owner_usa": False,
+                                        "reservado_por": user_id,
+                                        "estado": "CONFIRMADO",
+                                    }]
+                                    local_headers = headers.copy()
+                                    local_headers["Prefer"] = "resolution=merge-duplicates"
+
+                                    r_upd = requests.post(
+                                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                                        headers=local_headers,
+                                        json=payload_slot,
+                                        timeout=10,
+                                    )
+                                    if r_upd.status_code >= 400:
+                                        st.error("Supabase ha devuelto un error al reservar hoy.")
+                                        st.code(r_upd.text)
+                        else:
+                            # FUTURO -> crear pre_reserva PENDIENTE
+                            payload = [{
+                                "usuario_id": user_id,
+                                "fecha": d.isoformat(),
+                                "franja": f,
+                                "estado": "PENDIENTE",
+                            }]
+                            requests.post(
+                                f"{rest_url}/pre_reservas",
+                                headers=headers,
+                                json=payload,
+                                timeout=10,
+                            )
 
                 elif accion == "NOACCION":
                     # Si existe pre_reserva → CANCELAR
@@ -1735,6 +1789,7 @@ def view_suplente(profile):
             st.error("Error al guardar cambios.")
             st.code(str(e))
             return
+
 # ---------------------------------------------
 # MAIN
 # ---------------------------------------------
