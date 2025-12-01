@@ -2008,13 +2008,60 @@ def main():
 
         if st.button("Entrar"):
             auth_data = login(email, password, anon_key)
-            if auth_data:
+
+            if auth_data is None:
+                # Caso extremo: error duro de conexión / servidor
+                st.error("No se ha podido conectar con el servidor de autenticación.")
+                return
+
+            # --- Usuario bloqueado por demasiados intentos ---
+            if isinstance(auth_data, dict) and auth_data.get("blocked"):
+                blocked_until = auth_data.get("blocked_until")
+                attempts = auth_data.get("attempts", 0)
+
+                if blocked_until:
+                    # Tiempo restante aprox en minutos
+                    ahora_utc = datetime.utcnow()
+                    delta = blocked_until - ahora_utc
+                    minutos_restantes = max(1, int(delta.total_seconds() // 60))
+                    st.error(
+                        f"Usuario bloqueado por demasiados intentos fallidos. "
+                        f"Vuelve a intentarlo en aproximadamente {minutos_restantes} minutos."
+                    )
+                else:
+                    st.error("Usuario bloqueado por intentos fallidos de login.")
+                return
+
+            # --- Login correcto (Supabase devuelve 'user') ---
+            if isinstance(auth_data, dict) and "user" in auth_data:
                 st.session_state.auth = auth_data
                 st.success("Login correcto, cargando perfil…")
                 st.rerun()
+                return
+
+            # --- Login incorrecto pero sin bloqueo todavía ---
+            if isinstance(auth_data, dict):
+                attempts = auth_data.get("attempts")
+                if attempts is not None:
+                    try:
+                        restantes = max(0, MAX_INTENTOS - attempts)
+                    except NameError:
+                        # Por si algo raro con el import de MAX_INTENTOS
+                        restantes = None
+
+                    if restantes is not None:
+                        st.error(
+                            f"Email o contraseña incorrectos. "
+                            f"Intentos restantes antes de bloqueo: {restantes}."
+                        )
+                    else:
+                        st.error("Email o contraseña incorrectos.")
+                else:
+                    st.error("Email o contraseña incorrectos.")
             else:
-                st.error("Email o contraseña incorrectos")
-        return
+                st.error("Email o contraseña incorrectos.")
+
+        return  # mientras no haya auth, no seguimos
 
     # Ya hay sesión → coger user_id
     user = st.session_state.auth["user"]
@@ -2050,7 +2097,6 @@ def main():
 
     st.markdown("---")
 
-    
     # Vista según rol
     rol = profile["rol"]
     if rol == "ADMIN":
@@ -2061,6 +2107,7 @@ def main():
         view_suplente(profile)
     else:
         st.error(f"Rol desconocido: {rol}")
+
 
 if __name__ == "__main__":
     main()
