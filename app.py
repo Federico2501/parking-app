@@ -463,20 +463,147 @@ def cancelar_sorteo(fecha_obj: date):
 # ---------------------------------------------
 # LOGIN via SUPABASE AUTH
 # ---------------------------------------------
+# ============================================================
+#  CONTROL DE INTENTOS DE LOGIN
+# ============================================================
+from datetime import datetime, timedelta
+
+MAX_INTENTOS = 4
+BLOQUEO_MINUTOS = 15
+
+
+def _get_login_status(email: str):
+    """Devuelve (attempts, blocked_until_dt) o (0, None) si no existe."""
+    rest_url, headers, _ = get_rest_info()
+
+    try:
+        resp = requests.get(
+            f"{rest_url}/login_attempts",
+            headers=headers,
+            params={
+                "select": "email,attempts,blocked_until",
+                "email": f"eq.{email}",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return 0, None
+
+        data = resp.json()
+        if not data:
+            return 0, None
+
+        row = data[0]
+        attempts = row.get("attempts", 0)
+        blocked_raw = row.get("blocked_until")
+
+        if blocked_raw:
+            try:
+                blocked_dt = datetime.fromisoformat(blocked_raw.replace("Z", ""))
+            except Exception:
+                blocked_dt = None
+        else:
+            blocked_dt = None
+
+        return attempts, blocked_dt
+
+    except Exception:
+        return 0, None
+
+
+def _set_login_status(email: str, attempts: int, blocked_until_dt):
+    """Upsert del estado de login en Supabase."""
+    rest_url, headers, _ = get_rest_info()
+    now = datetime.utcnow().isoformat()
+
+    payload = [{
+        "email": email,
+        "attempts": attempts,
+        "last_attempt": now,
+        "blocked_until": blocked_until_dt.isoformat() if blocked_until_dt else None,
+    }]
+
+    local_headers = headers.copy()
+    local_headers["Prefer"] = "resolution=merge-duplicates"
+
+    try:
+        requests.post(
+            f"{rest_url}/login_attempts?on_conflict=email",
+            headers=local_headers,
+            json=payload,
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def registrar_login_fallido(email: str):
+    """Incrementa contador y bloquea si supera MAX_INTENTOS."""
+    email = (email or "").strip().lower()
+    attempts, _ = _get_login_status(email)
+
+    attempts_new = attempts + 1
+    blocked_until = None
+
+    if attempts_new >= MAX_INTENTOS:
+        blocked_until = datetime.utcnow() + timedelta(minutes=BLOQUEO_MINUTOS)
+
+    _set_login_status(email, attempts_new, blocked_until)
+
+    return attempts_new, blocked_until
+
+
+def resetear_login(email: str):
+    """Resetea contador tras un login correcto."""
+    email = (email or "").strip().lower()
+    _set_login_status(email, 0, None)
+
+
+# ============================================================
+#  FUNCIÓN LOGIN ORIGINAL + BLOQUEOS
+# ============================================================
 def login(email, password, anon_key):
+    email_norm = (email or "").strip().lower()
+
+    # 1) Comprobar bloqueo antes de hablar con Supabase
+    attempts, blocked_until = _get_login_status(email_norm)
+    ahora = datetime.utcnow()
+
+    if blocked_until and blocked_until > ahora:
+        # Usuario bloqueado → se devuelve None inmediatamente
+        return {
+            "blocked": True,
+            "blocked_until": blocked_until,
+            "attempts": attempts,
+        }
+
+    # 2) Login normal contra Supabase Auth
     url = st.secrets["SUPABASE_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
 
-    payload = {"email": email, "password": password}
+    payload = {"email": email_norm, "password": password}
     headers = {
         "apikey": anon_key,
         "Content-Type": "application/json",
     }
 
     resp = requests.post(url, headers=headers, json=payload)
+
     if resp.status_code == 200:
+        # Login correcto → reset intentos
+        resetear_login(email_norm)
         return resp.json()  # tokens + user
+
     else:
-        return None
+        # Login fallido
+        attempts_new, blocked_dt = registrar_login_fallido(email_norm)
+        return {
+            "blocked": blocked_dt is not None,
+            "blocked_until": blocked_dt,
+            "attempts": attempts_new,
+            "success": False,
+        }
+
+
 
 # ---------------------------------------------
 # Cargar perfil (rol, plaza) desde app_users
