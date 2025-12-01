@@ -466,16 +466,39 @@ def cancelar_sorteo(fecha_obj: date):
 # ============================================================
 #  CONTROL DE INTENTOS DE LOGIN
 # ============================================================
-from datetime import datetime, timedelta
-
+# Constantes (déjalas arriba en el fichero, fuera de la función)
 MAX_INTENTOS = 4
 BLOQUEO_MINUTOS = 15
 
 
-def _get_login_status(email: str):
-    """Devuelve (attempts, blocked_until_dt) o (0, None) si no existe."""
-    rest_url, headers, _ = get_rest_info()
+def _parse_supabase_timestamp(value):
+    """
+    Convierte un timestamp de Supabase (string o datetime) en datetime (UTC naive).
+    Si no puede parsearlo, devuelve None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
 
+    if isinstance(value, str):
+        # Supabase suele devolver algo tipo '2025-12-01T09:15:00+00:00' o con 'Z'
+        v = value.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(v)
+            # Lo convertimos a naive UTC para comparar con datetime.utcnow()
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            return dt
+        except Exception:
+            return None
+
+    return None
+
+
+def get_login_attempt_record(email: str):
+    """Lee (si existe) la fila de login_attempts para este email."""
+    rest_url, headers, _ = get_rest_info()
     try:
         resp = requests.get(
             f"{rest_url}/login_attempts",
@@ -487,41 +510,30 @@ def _get_login_status(email: str):
             timeout=10,
         )
         if resp.status_code != 200:
-            return 0, None
-
+            return None
         data = resp.json()
         if not data:
-            return 0, None
-
-        row = data[0]
-        attempts = row.get("attempts", 0)
-        blocked_raw = row.get("blocked_until")
-
-        if blocked_raw:
-            try:
-                blocked_dt = datetime.fromisoformat(blocked_raw.replace("Z", ""))
-            except Exception:
-                blocked_dt = None
-        else:
-            blocked_dt = None
-
-        return attempts, blocked_dt
-
+            return None
+        return data[0]
     except Exception:
-        return 0, None
+        return None
 
 
-def _set_login_status(email: str, attempts: int, blocked_until_dt):
-    """Upsert del estado de login en Supabase."""
+def update_login_attempt_record(email: str, attempts: int, blocked_until: datetime | None):
+    """Crea/actualiza la fila de login_attempts para este email."""
     rest_url, headers, _ = get_rest_info()
-    now = datetime.utcnow().isoformat()
 
-    payload = [{
+    if blocked_until is not None:
+        # Guardamos como ISO string
+        blocked_until_str = blocked_until.isoformat() + "Z"
+    else:
+        blocked_until_str = None
+
+    payload = {
         "email": email,
         "attempts": attempts,
-        "last_attempt": now,
-        "blocked_until": blocked_until_dt.isoformat() if blocked_until_dt else None,
-    }]
+        "blocked_until": blocked_until_str,
+    }
 
     local_headers = headers.copy()
     local_headers["Prefer"] = "resolution=merge-duplicates"
@@ -537,70 +549,83 @@ def _set_login_status(email: str, attempts: int, blocked_until_dt):
         pass
 
 
-def registrar_login_fallido(email: str):
-    """Incrementa contador y bloquea si supera MAX_INTENTOS."""
-    email = (email or "").strip().lower()
-    attempts, _ = _get_login_status(email)
-
-    attempts_new = attempts + 1
-    blocked_until = None
-
-    if attempts_new >= MAX_INTENTOS:
-        blocked_until = datetime.utcnow() + timedelta(minutes=BLOQUEO_MINUTOS)
-
-    _set_login_status(email, attempts_new, blocked_until)
-
-    return attempts_new, blocked_until
-
-
-def resetear_login(email: str):
-    """Resetea contador tras un login correcto."""
-    email = (email or "").strip().lower()
-    _set_login_status(email, 0, None)
+def reset_login_attempts(email: str):
+    """Pone attempts=0 y blocked_until=NULL para este email."""
+    rest_url, headers, _ = get_rest_info()
+    try:
+        requests.patch(
+            f"{rest_url}/login_attempts",
+            headers=headers,
+            params={"email": f"eq.{email}"},
+            json={"attempts": 0, "blocked_until": None},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
-# ============================================================
-#  FUNCIÓN LOGIN ORIGINAL + BLOQUEOS
-# ============================================================
 def login(email, password, anon_key):
-    email_norm = (email or "").strip().lower()
-
-    # 1) Comprobar bloqueo antes de hablar con Supabase
-    attempts, blocked_until = _get_login_status(email_norm)
+    """
+    Login con control de intentos:
+      - Máx. MAX_INTENTOS fallos.
+      - Si se supera, bloquea durante BLOQUEO_MINUTOS.
+      - Devuelve:
+          * dict Supabase normal (con 'user') si OK
+          * {'blocked': True, 'blocked_until': ..., 'attempts': ...} si bloqueado
+          * {'attempts': n} si fallo pero sin bloqueo aún
+          * None si error gordo de conexión.
+    """
+    # 1) Comprobar estado de bloqueo / intentos
     ahora = datetime.utcnow()
+    rec = get_login_attempt_record(email)
+    attempts_prev = rec.get("attempts", 0) if rec else 0
+    blocked_until_raw = rec.get("blocked_until") if rec else None
+    blocked_until = _parse_supabase_timestamp(blocked_until_raw)
 
     if blocked_until and blocked_until > ahora:
-        # Usuario bloqueado → se devuelve None inmediatamente
+        # Sigue bloqueado, no intentamos ni siquiera llamar a Auth
         return {
             "blocked": True,
             "blocked_until": blocked_until,
-            "attempts": attempts,
+            "attempts": attempts_prev,
         }
 
-    # 2) Login normal contra Supabase Auth
+    # 2) Intentar autenticar contra Supabase Auth
     url = st.secrets["SUPABASE_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
-
-    payload = {"email": email_norm, "password": password}
+    payload = {"email": email, "password": password}
     headers = {
         "apikey": anon_key,
         "Content-Type": "application/json",
     }
 
-    resp = requests.post(url, headers=headers, json=payload)
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=10)
+    except Exception:
+        # Error de red / servidor
+        return None
 
+    # 3) Login correcto → reseteamos intentos/bloqueo
     if resp.status_code == 200:
-        # Login correcto → reset intentos
-        resetear_login(email_norm)
+        reset_login_attempts(email)
         return resp.json()  # tokens + user
 
-    else:
-        # Login fallido
-        attempts_new, blocked_dt = registrar_login_fallido(email_norm)
+    # 4) Login incorrecto → incrementar intentos
+    attempts_new = attempts_prev + 1
+
+    if attempts_new >= MAX_INTENTOS:
+        # Bloqueo
+        bloquea_hasta = ahora + timedelta(minutes=BLOQUEO_MINUTOS)
+        update_login_attempt_record(email, attempts_new, bloquea_hasta)
         return {
-            "blocked": blocked_dt is not None,
-            "blocked_until": blocked_dt,
+            "blocked": True,
+            "blocked_until": bloquea_hasta,
             "attempts": attempts_new,
-            "success": False,
+        }
+    else:
+        # Solo incrementamos contador, sin bloqueo todavía
+        update_login_attempt_record(email, attempts_new, None)
+        return {
+            "attempts": attempts_new
         }
 
 
