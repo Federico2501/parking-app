@@ -1381,7 +1381,7 @@ def view_suplente(profile):
     st.write(f"Franjas utilizadas este mes: **{len(usadas_mes)}**")
 
     # ============================
-    # 2) Próximas reservas
+    # 2) Próximas reservas / solicitudes
     # ============================
     try:
         r = requests.get(
@@ -1676,6 +1676,22 @@ def view_suplente(profile):
                         else:
                             col.markdown("—")
 
+                        # INFO EXTRA SOLO PARA HOY: huecos libres / franja completa
+                        if is_today:
+                            disp_hoy = libres.get((d, fr), 0)
+                            if disp_hoy > 0:
+                                col.markdown(
+                                    f"<span style='font-size:11px;color:#0a0;'>"
+                                    f"Huecos libres hoy: {disp_hoy}</span>",
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                col.markdown(
+                                    "<span style='font-size:11px;color:#a00;'>"
+                                    "Franja completa</span>",
+                                    unsafe_allow_html=True,
+                                )
+
                         cambios[(d, fr)] = "SOLICITAR" if marc else "NOACCION"
 
             st.markdown("</div>", unsafe_allow_html=True)
@@ -1841,7 +1857,6 @@ def view_suplente(profile):
             st.error("Error al guardar cambios.")
             st.code(str(e))
             return
-
 # ---------------------------------------------
 # MAIN
 # ---------------------------------------------
