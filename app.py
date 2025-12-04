@@ -67,338 +67,69 @@ def se_puede_modificar_slot(fecha_slot: date, accion: str) -> bool:
 
 def ejecutar_sorteo(fecha_obj: date):
     """
-    Ejecuta el sorteo para una fecha dada (normalmente mañana).
+    Ejecuta el sorteo para una fecha dada llamando a la función RPC
+    ejecutar_sorteo_seguro(fecha_sorteo) en Supabase.
 
-    Lógica:
-      - Lee slots cedidos (owner_usa = false, reservado_por = null) para esa fecha.
-      - Lee pre_reservas PENDIENTE para esa fecha.
-      - Identifica:
-          * PACKS de día completo: mismo usuario con M y T PENDIENTE ese día.
-          * Solicitudes sueltas (solo M o solo T).
-      - Cuenta usos mensuales de cada suplente (slots ya reservados en el mes de la fecha).
-      - Reparte en este orden:
-          1) PACKS (día completo) → necesitan 1 plaza en M y 1 en T a la vez.
-          2) Solicitudes sueltas por franja (M / T).
-      - Empate siempre se resuelve por menos usos en el mes + random.
-      - Actualiza:
-          * slots (reservado_por, es_sorteo = true),
-          * pre_reservas → ASIGNADO / RECHAZADO.
+    Toda la lógica de:
+      - lectura de pre_reservas,
+      - lectura de slots,
+      - fairness / asignación,
+      - actualización de slots y pre_reservas
+
+    se ejecuta ahora **en Postgres**, no en el cliente.
     """
     rest_url, headers, _ = get_rest_info()
     fecha_str = fecha_obj.isoformat()
 
-    # 1) Slots cedidos y libres de esa fecha
     try:
-        resp_slots = requests.get(
-            f"{rest_url}/slots",
+        resp = requests.post(
+            f"{rest_url}/rpc/ejecutar_sorteo_seguro",
             headers=headers,
-            params={
-                "select": "fecha,franja,plaza_id,owner_usa,reservado_por",
-                "fecha": f"eq.{fecha_str}",
-                "owner_usa": "eq.false",
-                "reservado_por": "is.null",
-            },
-            timeout=10,
+            json={"fecha_sorteo": fecha_str},
+            timeout=30,
         )
-        slots_libres = resp_slots.json() if resp_slots.status_code == 200 else []
     except Exception as e:
-        st.error("No se han podido leer los slots cedidos para el sorteo.")
+        st.error("No se ha podido conectar con el servidor para ejecutar el sorteo.")
         st.code(str(e))
         return
 
-    if not slots_libres:
-        st.info("No hay plazas cedidas y libres para esa fecha. No hay nada que sortear.")
+    if resp.status_code >= 400:
+        st.error("Supabase ha devuelto un error al ejecutar el sorteo.")
+        st.code(resp.text)
         return
 
-    # 2) Pre-reservas PENDIENTE para esa fecha
+    # La función SQL devuelve un JSON con el resumen del sorteo
     try:
-        resp_pre = requests.get(
-            f"{rest_url}/pre_reservas",
-            headers=headers,
-            params={
-                "select": "id,usuario_id,franja,estado",
-                "fecha": f"eq.{fecha_str}",
-                "estado": "eq.PENDIENTE",
-            },
-            timeout=10,
-        )
-        pre_pendientes = resp_pre.json() if resp_pre.status_code == 200 else []
-    except Exception as e:
-        st.error("No se han podido leer las pre-reservas para el sorteo.")
-        st.code(str(e))
-        return
+        resumen = resp.json()
+    except Exception:
+        resumen = None
 
-    if not pre_pendientes:
-        st.info("No hay pre-reservas pendientes para esa fecha. No hay nada que sortear.")
-        return
-
-    # 3) Contar usos mensuales por usuario (slots reservados en el mes de la fecha)
-    first_day = fecha_obj.replace(day=1)
-    if fecha_obj.month == 12:
-        next_month_first = date(fecha_obj.year + 1, 1, 1)
-    else:
-        next_month_first = date(fecha_obj.year, fecha_obj.month + 1, 1)
-
-    try:
-        resp_usos = requests.get(
-            f"{rest_url}/slots",
-            headers=headers,
-            params={
-                "select": "fecha,reservado_por",
-                "fecha": f"gte.{first_day.isoformat()}",
-            },
-            timeout=10,
-        )
-        slots_mes_raw = resp_usos.json() if resp_usos.status_code == 200 else []
-    except Exception as e:
-        st.error("No se han podido leer los usos del mes para el sorteo.")
-        st.code(str(e))
-        return
-
-    usos_mes = {}
-    for s in slots_mes_raw:
-        try:
-            uid = s["reservado_por"]
-            if uid is None:
-                continue
-            fecha_slot = date.fromisoformat(s["fecha"][:10])
-            if not (first_day <= fecha_slot < next_month_first):
-                continue
-            usos_mes[uid] = usos_mes.get(uid, 0) + 1
-        except Exception:
-            continue
-
-    # 4) Agrupamos plazas libres por franja
-    from collections import defaultdict
-
-    plazas_por_franja = defaultdict(list)   # franja -> [plaza_id,...]
-    for sl in slots_libres:
-        fr = sl["franja"]
-        plazas_por_franja[fr].append(sl["plaza_id"])
-
-    # 5) Separar PACKS (día completo) de solicitudes sueltas
-    #    Un PACK = mismo usuario con M y T PENDIENTE en esa fecha.
-    by_user = defaultdict(list)
-    for pr in pre_pendientes:
-        by_user[pr["usuario_id"]].append(pr)
-
-    packs = []  # cada elemento: {"usuario_id":..., "M":row, "T":row}
-    singles_por_franja = {"M": [], "T": []}
-
-    for uid, rows in by_user.items():
-        franjas_user = {r["franja"] for r in rows}
-        if franjas_user == {"M", "T"} and len(rows) == 2:
-            # PACK de día completo
-            pack_data = {"usuario_id": uid}
-            for r in rows:
-                pack_data[r["franja"]] = r
-            packs.append(pack_data)
-        else:
-            # Solicitudes sueltas (puede haber 1 o varias, pero las tratamos independientes)
-            for r in rows:
-                fr = r["franja"]
-                if fr in ("M", "T"):
-                    singles_por_franja[fr].append(r)
-
-    asignados_ids = []
-    rechazados_ids = []
-
-    # 6) Primero: sortear PACKS de día completo
-    if packs:
-        # Ordenar packs por (usos_mes asc, random)
-        def clave_pack(p):
-            uid = p["usuario_id"]
-            u = usos_mes.get(uid, 0)
-            return (u, random.random())
-
-        packs_ordenados = sorted(packs, key=clave_pack)
-
-        plazas_M = plazas_por_franja.get("M", [])
-        plazas_T = plazas_por_franja.get("T", [])
-
-        nuevos_plazas_M = list(plazas_M)
-        nuevos_plazas_T = list(plazas_T)
-
-        for pack in packs_ordenados:
-            uid = pack["usuario_id"]
-            row_M = pack.get("M")
-            row_T = pack.get("T")
-
-            # ¿Hay capacidad en ambas franjas?
-            if nuevos_plazas_M and nuevos_plazas_T:
-                plaza_M = nuevos_plazas_M.pop(0)
-                plaza_T = nuevos_plazas_T.pop(0)
-
-                # Asignamos slot mañana
-                payload_M = [{
-                    "fecha": fecha_str,
-                    "plaza_id": plaza_M,
-                    "franja": "M",
-                    "owner_usa": False,
-                    "reservado_por": uid,
-                    "es_sorteo": True,
-                    "estado": "CONFIRMADO",
-                }]
-                # Asignamos slot tarde
-                payload_T = [{
-                    "fecha": fecha_str,
-                    "plaza_id": plaza_T,
-                    "franja": "T",
-                    "owner_usa": False,
-                    "reservado_por": uid,
-                    "es_sorteo": True,
-                    "estado": "CONFIRMADO",
-                }]
-
-                try:
-                    local_headers = headers.copy()
-                    local_headers["Prefer"] = "resolution=merge-duplicates"
-
-                    rM = requests.post(
-                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
-                        headers=local_headers,
-                        json=payload_M,
-                        timeout=10,
-                    )
-                    if rM.status_code >= 400:
-                        st.error("Error al asignar plaza de mañana a un pack.")
-                        st.code(rM.text)
-                        return
-
-                    rT = requests.post(
-                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
-                        headers=local_headers,
-                        json=payload_T,
-                        timeout=10,
-                    )
-                    if rT.status_code >= 400:
-                        st.error("Error al asignar plaza de tarde a un pack.")
-                        st.code(rT.text)
-                        return
-
-                    # Ambos pre_reservas del pack pasan a ASIGNADO
-                    asignados_ids.append(row_M["id"])
-                    asignados_ids.append(row_T["id"])
-
-                    # Incrementamos usos del usuario (2 franjas más)
-                    usos_mes[uid] = usos_mes.get(uid, 0) + 2
-
-                except Exception as e:
-                    st.error("Ha ocurrido un error al asignar un pack de día completo.")
-                    st.code(str(e))
-                    return
-
-            else:
-                # No hay capacidad en M o T → el pack pierde entero
-                if "M" in pack and pack["M"]["id"] not in rechazados_ids:
-                    rechazados_ids.append(pack["M"]["id"])
-                if "T" in pack and pack["T"]["id"] not in rechazados_ids:
-                    rechazados_ids.append(pack["T"]["id"])
-
-        # Actualizamos plazas libres tras packs
-        plazas_por_franja["M"] = nuevos_plazas_M
-        plazas_por_franja["T"] = nuevos_plazas_T
-
-    # 7) Segundo: sortear solicitudes sueltas, franja a franja
-    for franja in ["M", "T"]:
-        plazas = plazas_por_franja.get(franja, [])
-        solicitudes = singles_por_franja.get(franja, [])
-
-        if not plazas or not solicitudes:
-            continue
-
-        def clave_single(pr):
-            uid = pr["usuario_id"]
-            u = usos_mes.get(uid, 0)
-            return (u, random.random())
-
-        solicitudes_ordenadas = sorted(solicitudes, key=clave_single)
-
-        num_asignables = min(len(plazas), len(solicitudes_ordenadas))
-        plazas_disponibles = list(plazas)
-
-        for i, pr in enumerate(solicitudes_ordenadas):
-            uid = pr["usuario_id"]
-            if i < num_asignables and plazas_disponibles:
-                plaza_id = plazas_disponibles.pop(0)
-
-                payload = [{
-                    "fecha": fecha_str,
-                    "plaza_id": plaza_id,
-                    "franja": franja,
-                    "owner_usa": False,
-                    "reservado_por": uid,
-                    "es_sorteo": True,
-                    "estado": "CONFIRMADO",
-                }]
-
-                try:
-                    local_headers = headers.copy()
-                    local_headers["Prefer"] = "resolution=merge-duplicates"
-
-                    r = requests.post(
-                        f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
-                        headers=local_headers,
-                        json=payload,
-                        timeout=10,
-                    )
-                    if r.status_code >= 400:
-                        st.error("Error al asignar una plaza en el sorteo.")
-                        st.code(r.text)
-                        return
-
-                    asignados_ids.append(pr["id"])
-                    usos_mes[uid] = usos_mes.get(uid, 0) + 1
-
-                except Exception as e:
-                    st.error("Ha ocurrido un error al asignar una solicitud suelta.")
-                    st.code(str(e))
-                    return
-            else:
-                rechazados_ids.append(pr["id"])
-
-        # Guardamos las plazas restantes (por si queremos usarlas para debug)
-        plazas_por_franja[franja] = plazas_disponibles
-
-    # 8) Actualizar estados de pre_reservas en bloque
-    try:
-        if asignados_ids:
-            ids_str = ",".join(asignados_ids)
-            resp_patch_win = requests.patch(
-                f"{rest_url}/pre_reservas",
-                headers=headers,
-                params={"id": f"in.({ids_str})"},
-                json={"estado": "ASIGNADO"},
-                timeout=10,
-            )
-            if resp_patch_win.status_code >= 400:
-                st.error("Error al marcar pre-reservas como ASIGNADO.")
-                st.code(resp_patch_win.text)
-                return
-
-        if rechazados_ids:
-            ids_str = ",".join(rechazados_ids)
-            resp_patch_lose = requests.patch(
-                f"{rest_url}/pre_reservas",
-                headers=headers,
-                params={"id": f"in.({ids_str})"},
-                json={"estado": "RECHAZADO"},
-                timeout=10,
-            )
-            if resp_patch_lose.status_code >= 400:
-                st.error("Error al marcar pre-reservas como RECHAZADO.")
-                st.code(resp_patch_lose.text)
-                return
-
-    except Exception as e:
-        st.error("Ha ocurrido un error al actualizar el estado de las pre-reservas.")
-        st.code(str(e))
-        return
+    # Si el RPC devuelve una lista de objetos con campo 'tipo',
+    # calculamos un resumen similar al que tenías antes.
+    asignadas = 0
+    rechazadas = 0
+    if isinstance(resumen, list):
+        for r in resumen:
+            tipo = r.get("tipo")
+            if tipo in ("ASIGNADO", "PACK_ASIGNADO"):
+                asignadas += 1
+            elif tipo in ("RECHAZADO", "PACK_RECHAZADO"):
+                rechazadas += 1
 
     st.success(
-        f"Sorteo ejecutado para el {fecha_obj.strftime('%d/%m/%Y')}: "
-        f"{len(asignados_ids)} solicitudes ASIGNADAS, {len(rechazados_ids)} RECHAZADAS."
+        f"Sorteo ejecutado para el {fecha_obj.strftime('%d/%m/%Y')}."
     )
+
+    # Si tenemos contadores, mostramos detalle
+    if asignadas or rechazadas:
+        st.info(
+            f"Franjas asignadas: {asignadas} · Solicitudes rechazadas: {rechazadas}."
+        )
+
+    # Mostrar el JSON completo para debugging (opcional)
+    if resumen is not None:
+        st.markdown("**Detalle devuelto por el servidor:**")
+        st.json(resumen)
 
 
 def cancelar_sorteo(fecha_obj: date):
@@ -466,7 +197,7 @@ def cancelar_sorteo(fecha_obj: date):
 # ============================================================
 #  CONTROL DE INTENTOS DE LOGIN
 # ============================================================
-# Constantes (déjalas arriba en el fichero, fuera de la función)
+# Constantes                                                   
 MAX_INTENTOS = 4
 BLOQUEO_MINUTOS = 15
 
@@ -1414,6 +1145,64 @@ def view_admin(profile):
 
 def view_titular(profile):
     st.subheader("Panel TITULAR")
+
+    # ============================
+    # 0) Validación fuerte de plaza del titular (mitiga VUL-001)
+    # ============================
+    auth = st.session_state.get("auth")
+    if not auth:
+        st.error("No se ha podido obtener información de usuario.")
+        return
+
+    user_id = auth["user"]["id"]
+
+    # Plaza que dice el perfil (para mostrarla en UI si quieres)
+    plaza_id_profile = profile.get("plaza_id")
+
+    rest_url, headers, _ = get_rest_info()
+
+    # Preguntamos a BD cuál es la plaza REAL asignada a este usuario y que sea TITULAR
+    try:
+        resp_verify = requests.get(
+            f"{rest_url}/app_users",
+            headers=headers,
+            params={
+                "select": "plaza_id,rol",
+                "id": f"eq.{user_id}",
+            },
+            timeout=10,
+        )
+        resp_verify.raise_for_status()
+        data = resp_verify.json()
+    except Exception as e:
+        st.error("Error al verificar permisos sobre la plaza.")
+        st.code(str(e))
+        return
+
+    if not data:
+        st.error("No se ha encontrado tu usuario en app_users.")
+        return
+
+    row = data[0]
+    if row.get("rol") != "TITULAR":
+        st.error("No tienes rol de TITULAR, no puedes gestionar plazas de titular.")
+        return
+
+    plaza_id_bd = row.get("plaza_id")
+    if plaza_id_bd is None:
+        st.error("No tienes ninguna plaza asignada en la base de datos.")
+        return
+
+    # A partir de aquí, SOLO usamos plaza_id_bd (validado en BD)
+    # Opcional: sincronizar el profile en memoria
+    if plaza_id_profile != plaza_id_bd:
+        profile["plaza_id"] = plaza_id_bd
+
+    plaza_id = plaza_id_bd  # ESTA es la única plaza válida para operar
+
+    # ============================
+    # Codigo post validación
+    # ============================
 
     nombre = profile.get("nombre")
     plaza_id = profile.get("plaza_id")
