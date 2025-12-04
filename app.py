@@ -1230,7 +1230,7 @@ def view_suplente(profile):
     nombre = profile.get("nombre")
     st.write(f"Nombre: {nombre}")
 
-    # user_id (uuid de Supabase Auth)
+    # user_id
     auth = st.session_state.get("auth")
     if not auth:
         st.error("No se ha podido obtener información de usuario.")
@@ -1244,10 +1244,14 @@ def view_suplente(profile):
     # 1) KPI de uso mensual
     # ============================
     first_day = hoy.replace(day=1)
-    if first_day.month == 12:
-        next_month_first = date(first_day.year + 1, 1, 1)
-    else:
-        next_month_first = date(first_day.year, first_day.month + 1, 1)
+    next_month_first = (
+        first_day.replace(
+            month=(first_day.month % 12) + 1,
+            year=first_day.year + (first_day.month // 12),
+        )
+        if first_day.month == 12
+        else date(first_day.year, first_day.month + 1, 1)
+    )
 
     try:
         r = requests.get(
@@ -1267,16 +1271,16 @@ def view_suplente(profile):
     usadas_mes = []
     for x in usadas_raw:
         try:
-            f_uso = date.fromisoformat(x["fecha"][:10])
-            if first_day <= f_uso < next_month_first:
-                usadas_mes.append(f_uso)
+            f = date.fromisoformat(x["fecha"][:10])
+            if first_day <= f < next_month_first:
+                usadas_mes.append(f)
         except Exception:
             pass
 
     st.write(f"Franjas utilizadas este mes: **{len(usadas_mes)}**")
 
     # ============================
-    # 2) Próximas reservas / solicitudes (TU agenda)
+    # 2) Próximas reservas / solicitudes (agenda completa futura)
     # ============================
     try:
         r = requests.get(
@@ -1297,8 +1301,8 @@ def view_suplente(profile):
     slots_user = {}
     for s in slots_user_raw:
         try:
-            f_res = date.fromisoformat(s["fecha"][:10])
-            slots_user[(f_res, s["franja"])] = s["plaza_id"]
+            f = date.fromisoformat(s["fecha"][:10])
+            slots_user[(f, s["franja"])] = s["plaza_id"]
         except Exception:
             pass
 
@@ -1319,11 +1323,11 @@ def view_suplente(profile):
         pre_user_raw = []
 
     pre_user = {}
-    for row in pre_user_raw:
+    for rpr in pre_user_raw:
         try:
-            if row["estado"] != "CANCELADO":
-                f_res = date.fromisoformat(row["fecha"][:10])
-                pre_user[(f_res, row["franja"])] = row["estado"]
+            if rpr["estado"] != "CANCELADO":
+                f = date.fromisoformat(rpr["fecha"][:10])
+                pre_user[(f, rpr["franja"])] = rpr["estado"]
         except Exception:
             pass
 
@@ -1337,17 +1341,17 @@ def view_suplente(profile):
         st.markdown("_No tienes reservas ni solicitudes futuras._")
     else:
         out = []
-        for (f_res, franja) in claves:
+        for (f, franja) in claves:
             fr_txt = "08 - 14" if franja == "M" else "14 - 20"
-            fecha_txt = f_res.strftime("%a %d/%m")
+            fecha_txt = f.strftime("%a %d/%m")
 
-            if (f_res, franja) in slots_user:
-                plaza = slots_user[(f_res, franja)]
+            if (f, franja) in slots_user:
+                plaza = slots_user[(f, franja)]
                 out.append(
                     f"- {fecha_txt} – {fr_txt} – Plaza **P-{plaza}** (asignada)"
                 )
             else:
-                est = pre_user.get((f_res, franja), "PENDIENTE")
+                est = pre_user.get((f, franja), "PENDIENTE")
                 if est == "PENDIENTE":
                     out.append(
                         f"- {fecha_txt} – {fr_txt} – _Solicitud pendiente de plaza_"
@@ -1386,21 +1390,14 @@ def view_suplente(profile):
         return
 
     # ============================
-    # 4) Slots agregados (todas las plazas de esos días)
+    # 4) Leer slots agregados (todas plazas de esos días)
     # ============================
-    from collections import defaultdict
-
-    libres = defaultdict(int)        # (fecha,franja) -> nº plazas cedidas libres
-    reservas_user_sem = {}          # (fecha,franja) -> plaza_id usuario
-
     try:
-        fechas_filter = ",".join(d.isoformat() for d in dias_semana)
         r = requests.get(
             f"{rest_url}/slots",
             headers=headers,
             params={
                 "select": "fecha,franja,owner_usa,reservado_por,plaza_id",
-                "fecha": f"in.({fechas_filter})",
             },
             timeout=10,
         )
@@ -1408,25 +1405,30 @@ def view_suplente(profile):
     except Exception:
         slots_raw = []
 
+    from collections import defaultdict
+
+    libres = defaultdict(int)       # (fecha,franja) -> nº plazas cedidas libres
+    reservas_user_sem = {}         # (fecha,franja) -> plaza_id usuario
+
     for s in slots_raw:
         try:
-            f_dia = date.fromisoformat(s["fecha"][:10])
+            f = date.fromisoformat(s["fecha"][:10])
         except Exception:
             continue
 
-        if f_dia not in dias_semana:
+        if f not in dias_semana:
             continue
 
         fr = s["franja"]
 
         if s["reservado_por"] == user_id:
-            reservas_user_sem[(f_dia, fr)] = s["plaza_id"]
+            reservas_user_sem[(f, fr)] = s["plaza_id"]
 
         if s["owner_usa"] is False and s["reservado_por"] is None:
-            libres[(f_dia, fr)] += 1
+            libres[(f, fr)] += 1
 
     # ============================
-    # 5A) Pre-reservas de semana (del usuario, para checkboxes)
+    # 5) Pre-reservas de semana (usuario actual)
     # ============================
     try:
         r = requests.get(
@@ -1435,7 +1437,7 @@ def view_suplente(profile):
             params={
                 "select": "fecha,franja,estado,pack_id",
                 "usuario_id": f"eq.{user_id}",
-                "fecha": f"in.({fechas_filter})",
+                "fecha": f"in.({','.join(d.isoformat() for d in dias_semana)})",
                 "order": "fecha.asc,franja.asc",
             },
             timeout=10,
@@ -1449,43 +1451,16 @@ def view_suplente(profile):
     for row in pre_sem_raw:
         try:
             if row["estado"] != "CANCELADO":
-                f_dia = date.fromisoformat(row["fecha"][:10])
+                f = date.fromisoformat(row["fecha"][:10])
                 fr = row["franja"]
-                pre_sem[(f_dia, fr)] = row["estado"]
+                pre_sem[(f, fr)] = row["estado"]
                 if row.get("pack_id"):
-                    pack_ids[(f_dia, fr)] = row["pack_id"]
+                    pack_ids[(f, fr)] = row["pack_id"]
         except Exception:
             pass
 
     # ============================
-    # 5B) Solicitudes totales por fecha/franja (TODOS los usuarios)
-    # ============================
-    solicitudes_por_fr = defaultdict(int)
-    try:
-        r = requests.get(
-            f"{rest_url}/pre_reservas",
-            headers=headers,
-            params={
-                "select": "fecha,franja,estado",
-                "fecha": f"in.({fechas_filter})",
-                "estado": "in.(PENDIENTE,ASIGNADO)",
-            },
-            timeout=10,
-        )
-        agg_raw = r.json()
-    except Exception:
-        agg_raw = []
-
-    for row in agg_raw:
-        try:
-            f_dia = date.fromisoformat(row["fecha"][:10])
-            fr = row["franja"]
-            solicitudes_por_fr[(f_dia, fr)] += 1
-        except Exception:
-            pass
-
-    # ============================
-    # 6) UI – checkboxes + día completo + contadores
+    # 6) UI tipo TITULAR (checkboxes + día completo)
     # ============================
     st.markdown("### Selecciona las franjas que deseas solicitar:")
 
@@ -1511,7 +1486,7 @@ def view_suplente(profile):
             cols = st.columns(4)
             cols[0].write(d.strftime("%a %d/%m"))
 
-            # Estado actual
+            # Estado BD actual
             slot_M = reservas_user_sem.get((d, "M"))
             slot_T = reservas_user_sem.get((d, "T"))
 
@@ -1521,11 +1496,15 @@ def view_suplente(profile):
             tiene_slot_M = slot_M is not None
             tiene_slot_T = slot_T is not None
 
+            # FULL DAY adjudicado
             adjud_full = tiene_slot_M and tiene_slot_T
 
+            # Puede modificar este día?
             editable = se_puede_modificar_slot(d, "reservar")
 
-            # ---- Día completo
+            # ----------------------------
+            # Día completo checkbox
+            # ----------------------------
             key_full = f"full_{d.isoformat()}"
             default_full = (
                 pre_M is not None
@@ -1557,35 +1536,34 @@ def view_suplente(profile):
                 else:
                     cambios[(d, "FULL")] = "NOFULL"
 
-                    # ---- Franjas individuales
+                    # ----------------------------
+                    # Franjas individuales
+                    # ----------------------------
                     for fr_idx, fr in enumerate(["M", "T"], start=1):
                         col = cols[fr_idx]
                         key = (d, fr)
 
+                        # Ya tiene slot adjudicado en esa franja
                         if (d, fr) in reservas_user_sem:
                             plaza = reservas_user_sem[(d, fr)]
                             col.markdown(f"🟩 Adjudicada P-{plaza}")
                             cambios[(d, fr)] = "NOACCION"
                             continue
 
-                        plazas_libres = libres.get((d, fr), 0)
-                        solicitudes_tot = solicitudes_por_fr.get((d, fr), 0)
+                        # Huecos libres para HOY
+                        disp_hoy = libres.get((d, fr), 0) if is_today else None
 
-                        # Si HOY y no hay plazas -> solo mensaje, sin checkbox
-                        if is_today and plazas_libres <= 0:
+                        # Si es HOY y la franja está completa -> solo texto, sin checkbox
+                        if is_today and disp_hoy == 0:
                             col.markdown(
                                 "<span style='font-size:11px;color:#a00;'>"
                                 "Franja completa</span>",
                                 unsafe_allow_html=True,
                             )
-                            col.markdown(
-                                f"<span style='font-size:11px;color:#a00;'>"
-                                f"0 plazas</span> – {solicitudes_tot} solicitudes",
-                                unsafe_allow_html=True,
-                            )
                             cambios[(d, fr)] = "NOACCION"
                             continue
 
+                        # Estado de pre-reserva
                         estado_pre = pre_sem.get(key)
                         if estado_pre in ("PENDIENTE", "ASIGNADO"):
                             marc = True
@@ -1601,13 +1579,13 @@ def view_suplente(profile):
                         else:
                             col.markdown("—")
 
-                        color_plazas = "#0a0" if plazas_libres > 0 else "#a00"
-                        col.markdown(
-                            f"<span style='font-size:11px;color:{color_plazas};'>"
-                            f"{plazas_libres} plazas</span> – "
-                            f"{solicitudes_tot} solicitudes",
-                            unsafe_allow_html=True,
-                        )
+                        # Info adicional SOLO HOY si hay huecos
+                        if is_today and disp_hoy and disp_hoy > 0:
+                            col.markdown(
+                                f"<span style='font-size:11px;color:#0a0;'>"
+                                f"Huecos libres hoy: {disp_hoy}</span>",
+                                unsafe_allow_html=True,
+                            )
 
                         cambios[(d, fr)] = "SOLICITAR" if marc else "NOACCION"
 
@@ -1651,12 +1629,12 @@ def view_suplente(profile):
                     continue
 
                 # Franjas sueltas
-                f_fr = fr
-                esta_pre = (d, f_fr) in pre_sem
-                esta_slot = (d, f_fr) in reservas_user_sem
+                f = fr
+                esta_pre = (d, f) in pre_sem
+                esta_slot = (d, f) in reservas_user_sem
 
                 if accion == "SOLICITAR":
-                    # HOY → reserva directa si hay plaza cedida libre
+                    # HOY -> reserva directa si hay plaza cedida libre
                     if d == hoy:
                         if not esta_slot:
                             resp_libre = requests.get(
@@ -1665,11 +1643,11 @@ def view_suplente(profile):
                                 params={
                                     "select": "plaza_id",
                                     "fecha": f"eq.{d.isoformat()}",
-                                    "franja": f"eq.{f_fr}",
+                                    "franja": f"eq.{f}",
                                     "owner_usa": "eq.false",
                                     "reservado_por": "is.null",
                                     "order": "plaza_id.asc",
-                                    "limit": 1,
+                                    "limit": 1",
                                 },
                                 timeout=10,
                             )
@@ -1684,14 +1662,16 @@ def view_suplente(profile):
                                         {
                                             "fecha": d.isoformat(),
                                             "plaza_id": plaza_id,
-                                            "franja": f_fr,
+                                            "franja": f,
                                             "owner_usa": False,
                                             "reservado_por": user_id,
                                             "estado": "CONFIRMADO",
                                         }
                                     ]
                                     local_headers = headers.copy()
-                                    local_headers["Prefer"] = "resolution=merge-duplicates"
+                                    local_headers["Prefer"] = (
+                                        "resolution=merge-duplicates"
+                                    )
 
                                     r_upd = requests.post(
                                         f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
@@ -1705,6 +1685,7 @@ def view_suplente(profile):
                                         )
                                         st.code(r_upd.text)
 
+                                    # Si había pre_reserva PENDIENTE para hoy, marcarla ASIGNADO
                                     if esta_pre:
                                         try:
                                             requests.patch(
@@ -1713,7 +1694,7 @@ def view_suplente(profile):
                                                 params={
                                                     "usuario_id": f"eq.{user_id}",
                                                     "fecha": f"eq.{d.isoformat()}",
-                                                    "franja": f"eq.{f_fr}",
+                                                    "franja": f"eq.{f}",
                                                     "estado": "eq.PENDIENTE",
                                                 },
                                                 json={"estado": "ASIGNADO"},
@@ -1723,17 +1704,17 @@ def view_suplente(profile):
                                             pass
                                 else:
                                     st.warning(
-                                        f"No queda hueco disponible hoy en la franja "
-                                        f"{'08-14' if f_fr == 'M' else '14-20'}."
+                                        f"No queda hueco disponible para hoy en la franja "
+                                        f"{'08-14' if f == 'M' else '14-20'}."
                                     )
-                    # FUTURO → solo pre_reserva nueva
+                    # FUTURO -> solo pre_reserva si no existía nada
                     else:
                         if not esta_pre and not esta_slot:
                             payload = [
                                 {
                                     "usuario_id": user_id,
                                     "fecha": d.isoformat(),
-                                    "franja": f_fr,
+                                    "franja": f,
                                     "estado": "PENDIENTE",
                                 }
                             ]
@@ -1752,7 +1733,7 @@ def view_suplente(profile):
                             params={
                                 "usuario_id": f"eq.{user_id}",
                                 "fecha": f"eq.{d.isoformat()}",
-                                "franja": f"eq.{f_fr}",
+                                "franja": f"eq.{f}",
                                 "estado": "in.(PENDIENTE,ASIGNADO)",
                             },
                             json={"estado": "CANCELADO"},
