@@ -1459,35 +1459,43 @@ def view_suplente(profile):
         except Exception:
             pass
 
+      # ============================
+    # 5B) Solicitudes totales por fecha/franja (TODOS los usuarios, vía RPC)
     # ============================
-    # 5B) Solicitudes totales por fecha/franja (TODOS los usuarios)
-    #      → lo hace Supabase con group by (menos datos y más robusto)
-    # ============================
+    solicitudes_por_fr = defaultdict(int)
+
     try:
-        r = requests.get(
-            f"{rest_url}/pre_reservas",
+        fechas_str = [d.isoformat() for d in dias_semana]
+
+        resp = requests.post(
+            f"{rest_url}/rpc/pre_reservas_agg",
             headers=headers,
-            params={
-                "select": "fecha,franja,count:count()",
-                "fecha": f"in.({','.join(d.isoformat() for d in dias_semana)})",
-                "estado": "in.(PENDIENTE,ASIGNADO)",
-                "group": "fecha,franja",
-            },
+            json={"_fechas": fechas_str},
             timeout=10,
         )
-        pre_all_agg = r.json()
-    except Exception:
-        pre_all_agg = []
 
-    solicitudes_por_fr = defaultdict(int)  # (fecha,franja) -> nº solicitudes totales
-    for row in pre_all_agg:
-        try:
-            f = date.fromisoformat(row["fecha"][:10])
-            fr = row["franja"]
-            cnt = row.get("count", 0)
-            solicitudes_por_fr[(f, fr)] = cnt
-        except Exception:
+        if resp.status_code == 200:
+            data_agg = resp.json()
+            for row in data_agg:
+                try:
+                    # Puede venir como string ISO o como date; cubrimos ambos casos
+                    if isinstance(row["fecha"], str):
+                        f = date.fromisoformat(row["fecha"][:10])
+                    else:
+                        f = row["fecha"]
+                except Exception:
+                    continue
+
+                fr = row["franja"]
+                cnt = row.get("solicitudes", 0)
+                solicitudes_por_fr[(f, fr)] = cnt
+        else:
+            # Si falla el RPC, dejamos solicitudes_por_fr en 0 y no rompemos la UI
             pass
+
+    except Exception:
+        # Cualquier error de red / parseo -> seguimos con 0 solicitudes
+        pass
 
     # ============================
     # 6) UI tipo TITULAR (checkboxes + día completo)
