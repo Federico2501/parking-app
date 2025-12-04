@@ -763,7 +763,7 @@ def view_admin(profile):
             continue
         pid = s["plaza_id"]
 
-        # 👇 Evita KeyError para plazas que no tienen titular (no están en plazas_ids)
+        # Evita KeyError para plazas que no tienen titular (no están en plazas_ids)
         if pid not in plazas_stats:
             continue
 
@@ -875,7 +875,7 @@ def view_admin(profile):
     # ---------------------------
     # 7) Sorteo pre-reservas (ADMIN)
     # ---------------------------
-    st.markdown("### 🎲 Sorteo de plazas (ADMIN)")
+    st.markdown("### Sorteo de plazas (ADMIN)")
     fecha_por_defecto = hoy + timedelta(days=1)
 
     fecha_sorteo = st.date_input(
@@ -891,7 +891,7 @@ def view_admin(profile):
     if col_sorteo.button("Ejecutar sorteo para esta fecha"):
         ejecutar_sorteo(fecha_sorteo)
 
-    if col_reset.button("Reiniciar sorteos de esta fecha (demo)"):
+    if col_reset.button("Reiniciar sorteos de esta fecha"):
         cancelar_sorteo(fecha_sorteo)
 
 
