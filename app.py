@@ -56,6 +56,9 @@ def is_jwt_expired(token: str) -> bool:
     """
     Devuelve True si el JWT está caducado o no se puede leer bien.
     """
+    # Import local para evitar que una variable global 'time' pise el módulo
+    import time as _time
+
     payload = _decode_jwt_payload(token)
     if not payload:
         # Si no podemos leer el token, por seguridad lo consideramos inválido
@@ -66,7 +69,7 @@ def is_jwt_expired(token: str) -> bool:
         # Si el token no trae 'exp', lo consideramos válido (caso raro)
         return False
 
-    now = int(time.time())
+    now = int(_time.time())
     return now >= int(exp)
 
 def se_puede_modificar_slot(fecha_slot: date, accion: str) -> bool:
