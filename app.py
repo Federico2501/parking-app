@@ -619,7 +619,7 @@ def login(email, password, anon_key):
         hora_str = bloqueado_hasta.strftime("%H:%M")
         st.error(
             f"Usuario bloqueado por demasiados intentos fallidos. "
-            f"Vuelve a intentarlo a las **{hora_str}**.."
+            f"Vuelve a intentarlo a las **{hora_str}**."
         )
         # Guardar estado y salir
         state["intentos_fallidos"] = intentos
