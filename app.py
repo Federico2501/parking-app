@@ -616,7 +616,8 @@ def login(email, password, anon_key):
 
     # 2) Si sigue bloqueado (bloqueado_hasta en el futuro), no dejamos ni probar
     if bloqueado_hasta and bloqueado_hasta > ahora:
-        hora_str = bloqueado_hasta.strftime("%H:%M")
+        dt_madrid = dt_obj + timedelta(hours=1)
+        hora_str = dt_madrid.strftime("%H:%M")
         st.error(
             f"Usuario bloqueado por demasiados intentos fallidos. "
             f"Vuelve a intentarlo a las **{hora_str}**."
