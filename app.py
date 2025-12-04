@@ -1460,31 +1460,32 @@ def view_suplente(profile):
             pass
 
     # ============================
-    # 5B) NUEVO: solicitudes totales por fecha/franja (todos los usuarios)
-    #      -> sin filtro "estado" en Supabase, filtramos en Python
+    # 5B) Solicitudes totales por fecha/franja (TODOS los usuarios)
+    #      → lo hace Supabase con group by (menos datos y más robusto)
     # ============================
     try:
         r = requests.get(
             f"{rest_url}/pre_reservas",
             headers=headers,
             params={
-                "select": "fecha,franja,estado",
+                "select": "fecha,franja,count:count()",
                 "fecha": f"in.({','.join(d.isoformat() for d in dias_semana)})",
+                "estado": "in.(PENDIENTE,ASIGNADO)",
+                "group": "fecha,franja",
             },
             timeout=10,
         )
-        pre_all_raw = r.json()
+        pre_all_agg = r.json()
     except Exception:
-        pre_all_raw = []
+        pre_all_agg = []
 
     solicitudes_por_fr = defaultdict(int)  # (fecha,franja) -> nº solicitudes totales
-    for row in pre_all_raw:
+    for row in pre_all_agg:
         try:
             f = date.fromisoformat(row["fecha"][:10])
             fr = row["franja"]
-            estado = row["estado"]
-            if estado in ("PENDIENTE", "ASIGNADO"):
-                solicitudes_por_fr[(f, fr)] += 1
+            cnt = row.get("count", 0)
+            solicitudes_por_fr[(f, fr)] = cnt
         except Exception:
             pass
 
@@ -1694,7 +1695,7 @@ def view_suplente(profile):
                                     "owner_usa": "eq.false",
                                     "reservado_por": "is.null",
                                     "order": "plaza_id.asc",
-                                    "limit": 1,
+                                    "limit": 1",
                                 },
                                 timeout=10,
                             )
@@ -1796,7 +1797,6 @@ def view_suplente(profile):
             st.error("Error al guardar cambios.")
             st.code(str(e))
             return
-
 
 # ---------------------------------------------
 # MAIN
