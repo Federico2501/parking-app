@@ -1647,7 +1647,7 @@ def view_suplente(profile):
                                     "owner_usa": "eq.false",
                                     "reservado_por": "is.null",
                                     "order": "plaza_id.asc",
-                                    "limit": 1",
+                                    "limit": "1",
                                 },
                                 timeout=10,
                             )
