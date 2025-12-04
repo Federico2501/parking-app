@@ -744,7 +744,7 @@ def login(email, password, anon_key):
         sec["blocked_until"] = ahora + timedelta(minutes=BLOCK_MINUTES)
         st.error(
             f"Usuario bloqueado por demasiados intentos fallidos. "
-            f"Podrás volver a intentarlo a las {sec['blocked_until'].strftime('%H:%M']}."
+            f"Podrás volver a intentarlo a las {sec['blocked_until'].strftime['%H:%M']}."
         )
     else:
         restantes = MAX_LOGIN_ATTEMPTS - sec["failed"]
