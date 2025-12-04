@@ -1428,7 +1428,7 @@ def view_suplente(profile):
             libres[(f, fr)] += 1
 
     # ============================
-    # 5) Pre-reservas de semana
+    # 5) Pre-reservas de semana (usuario actual)
     # ============================
     try:
         r = requests.get(
@@ -1456,6 +1456,35 @@ def view_suplente(profile):
                 pre_sem[(f, fr)] = row["estado"]
                 if row.get("pack_id"):
                     pack_ids[(f, fr)] = row["pack_id"]
+        except Exception:
+            pass
+
+    # ============================
+    # 5B) NUEVO: solicitudes totales por fecha/franja (todos los usuarios)
+    # ============================
+    try:
+        r = requests.get(
+            f"{rest_url}/pre_reservas",
+            headers=headers,
+            params={
+                "select": "fecha,franja,estado",
+                "fecha": f"in.({','.join(d.isoformat() for d in dias_semana)})",
+                "estado": "in.(PENDIENTE,ASIGNADO)",
+            },
+            timeout=10,
+        )
+        pre_all_raw = r.json()
+    except Exception:
+        pre_all_raw = []
+
+    solicitudes_por_fr = defaultdict(int)  # (fecha,franja) -> nº solicitudes totales
+    for row in pre_all_raw:
+        try:
+            f = date.fromisoformat(row["fecha"][:10])
+            fr = row["franja"]
+            estado = row["estado"]
+            if estado in ("PENDIENTE", "ASIGNADO"):
+                solicitudes_por_fr[(f, fr)] += 1
         except Exception:
             pass
 
@@ -1553,20 +1582,27 @@ def view_suplente(profile):
                             cambios[(d, fr)] = "NOACCION"
                             continue
 
-                        # Cálculo de huecos para HOY
-                        disp_hoy = libres.get((d, fr), 0) if is_today else None
+                        # Plazas libres y solicitudes totales para esa franja
+                        plazas_libres = libres.get((d, fr), 0)
+                        num_solicitudes = solicitudes_por_fr.get((d, fr), 0)
 
-                        # Si es HOY y la franja está completa -> solo texto, sin checkbox
-                        if is_today and disp_hoy == 0:
+                        # Si es HOY y no hay plazas -> solo mensaje, sin checkbox
+                        if is_today and plazas_libres == 0:
+                            color_plazas = "#a00"
                             col.markdown(
-                                "<span style='font-size:11px;color:#a00;'>"
-                                "Franja completa</span>",
+                                f"""
+                                <span style='font-size:11px;'>
+                                  <span style='color:{color_plazas};'><b>{plazas_libres} plazas</b></span>
+                                  –
+                                  <span style='color:#555;'>{num_solicitudes} solicitudes</span>
+                                </span>
+                                """,
                                 unsafe_allow_html=True,
                             )
                             cambios[(d, fr)] = "NOACCION"
                             continue
 
-                        # Estado de pre-reserva
+                        # Estado de pre-reserva del usuario actual
                         estado_pre = pre_sem.get(key)
                         if estado_pre in ("PENDIENTE", "ASIGNADO"):
                             marc = True
@@ -1582,13 +1618,18 @@ def view_suplente(profile):
                         else:
                             col.markdown("—")
 
-                        # Info adicional solo hoy, si hay huecos
-                        if is_today and disp_hoy and disp_hoy > 0:
-                            col.markdown(
-                                f"<span style='font-size:11px;color:#0a0;'>"
-                                f"Huecos libres hoy: {disp_hoy}</span>",
-                                unsafe_allow_html=True,
-                            )
+                        # Mensaje "X plazas - Y solicitudes" SIEMPRE visible
+                        color_plazas = "#0a0" if plazas_libres > 0 else "#a00"
+                        col.markdown(
+                            f"""
+                            <span style='font-size:11px;'>
+                              <span style='color:{color_plazas};'><b>{plazas_libres} plazas</b></span>
+                              –
+                              <span style='color:#555;'>{num_solicitudes} solicitudes</span>
+                            </span>
+                            """,
+                            unsafe_allow_html=True,
+                        )
 
                         cambios[(d, fr)] = "SOLICITAR" if marc else "NOACCION"
 
