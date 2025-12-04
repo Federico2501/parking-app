@@ -7,7 +7,7 @@ from datetime import date, timedelta, datetime, time, timezone
 
 st.set_page_config(
     page_title="Parking KM0",
-    page_icon="Logo_GLS.png"
+    page_icon="Logo_KM0.png"
 )
 
 
@@ -2175,7 +2175,7 @@ def view_suplente(profile):
 # MAIN
 # ---------------------------------------------
 def main():
-    st.image("Logo_GLS.png", width=200)
+    st.image("Logo_KM0.png", width=200)
     st.title("Parking KM0")
 
     rest_url, headers, anon_key = get_rest_info()
