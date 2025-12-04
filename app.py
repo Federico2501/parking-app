@@ -1142,7 +1142,7 @@ def view_admin(profile):
     # ---------------------------
     # 7) Sorteo pre-reservas
     # ---------------------------
-    st.markdown("### 🎲 Sorteo de plazas (ADMIN)")
+    st.markdown("### Sorteo de plazas (ADMIN)")
     fecha_por_defecto = hoy + timedelta(days=1)
 
     fecha_sorteo = st.date_input(
@@ -1355,8 +1355,8 @@ def view_admin(profile):
             st.error("Ha ocurrido un error al ejecutar el sorteo.")
             st.code(str(e))
 
-    # ---------- BOTÓN 2: REINICIAR SORTEO (DEMO) ----------
-    if col_reset.button("Reiniciar sorteos de esta fecha (demo)"):
+    # ---------- BOTÓN 2: REINICIAR SORTEO  ----------
+    if col_reset.button("Reiniciar sorteos de esta fecha"):
         try:
             # 1) Poner en PENDIENTE todas las pre_reservas ASIGNADO/RECHAZADO de esa fecha
             requests.patch(
@@ -1442,7 +1442,7 @@ def view_titular(profile):
         return True
 
     # ---------------------------
-    # NUEVA LÓGICA DE SEMANAS
+    # LÓGICA DE SEMANAS
     # ---------------------------
     hoy = date.today()
     weekday = hoy.weekday()  # 0=lunes..6=domingo
@@ -1915,14 +1915,6 @@ def view_suplente(profile):
             # FULL DAY adjudicado
             adjud_full = tiene_slot_M and tiene_slot_T
 
-            # FULL DAY pendiente
-            full_pendiente = (
-                not tiene_slot_M
-                and not tiene_slot_T
-                and pre_M == "PENDIENTE"
-                and pre_T == "PENDIENTE"
-            )
-
             # Puede modificar este día?
             editable = se_puede_modificar_slot(d, "reservar")
 
@@ -1969,12 +1961,27 @@ def view_suplente(profile):
                         col = cols[fr_idx]
                         key = (d, fr)
 
+                        # Ya tiene slot adjudicado en esa franja
                         if (d, fr) in reservas_user_sem:
                             plaza = reservas_user_sem[(d, fr)]
                             col.markdown(f"🟩 Adjudicada P-{plaza}")
                             cambios[(d, fr)] = "NOACCION"
                             continue
 
+                        # Cálculo de huecos para HOY
+                        disp_hoy = libres.get((d, fr), 0) if is_today else None
+
+                        # Si es HOY y la franja está completa -> solo texto, sin checkbox
+                        if is_today and disp_hoy == 0:
+                            col.markdown(
+                                "<span style='font-size:11px;color:#a00;'>"
+                                "Franja completa</span>",
+                                unsafe_allow_html=True,
+                            )
+                            cambios[(d, fr)] = "NOACCION"
+                            continue
+
+                        # Estado de pre-reserva
                         estado_pre = pre_sem.get(key)
                         if estado_pre in ("PENDIENTE", "ASIGNADO"):
                             marc = True
@@ -1990,21 +1997,13 @@ def view_suplente(profile):
                         else:
                             col.markdown("—")
 
-                        # INFO EXTRA SOLO PARA HOY: huecos libres / franja completa
-                        if is_today:
-                            disp_hoy = libres.get((d, fr), 0)
-                            if disp_hoy > 0:
-                                col.markdown(
-                                    f"<span style='font-size:11px;color:#0a0;'>"
-                                    f"Huecos libres hoy: {disp_hoy}</span>",
-                                    unsafe_allow_html=True,
-                                )
-                            else:
-                                col.markdown(
-                                    "<span style='font-size:11px;color:#a00;'>"
-                                    "Franja completa</span>",
-                                    unsafe_allow_html=True,
-                                )
+                        # Info adicional solo hoy, si hay huecos
+                        if is_today and disp_hoy and disp_hoy > 0:
+                            col.markdown(
+                                f"<span style='font-size:11px;color:#0a0;'>"
+                                f"Huecos libres hoy: {disp_hoy}</span>",
+                                unsafe_allow_html=True,
+                            )
 
                         cambios[(d, fr)] = "SOLICITAR" if marc else "NOACCION"
 
@@ -2171,6 +2170,7 @@ def view_suplente(profile):
             st.error("Error al guardar cambios.")
             st.code(str(e))
             return
+
 # ---------------------------------------------
 # MAIN
 # ---------------------------------------------
