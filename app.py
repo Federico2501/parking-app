@@ -6,7 +6,7 @@ import uuid
 from datetime import date, timedelta, datetime, time, timezone
 
 st.set_page_config(
-    page_title="Parking GLS",
+    page_title="Parking KM0",
     page_icon="Logo_GLS.png"
 )
 
@@ -596,6 +596,100 @@ def _get_login_state(email: str):
     return state, key
 
 
+from datetime import datetime, timedelta, timezone
+
+# ---------------------------------------------
+# Tabla de seguridad de login (intentos y bloqueo)
+#   - Tabla en Supabase: login_security
+#   - Columnas: email (PK o unique), failed_attempts (int), blocked_until (timestamptz, puede ser NULL)
+# ---------------------------------------------
+def load_user_security(email: str) -> dict:
+    """
+    Devuelve la info de seguridad del usuario:
+      - failed_attempts: nº de intentos fallidos
+      - blocked_until: ISO string UTC o None
+    Si no existe registro, devuelve valores por defecto.
+    """
+    rest_url, headers, _ = get_rest_info()
+    try:
+        resp = requests.get(
+            f"{rest_url}/login_security",
+            headers=headers,
+            params={
+                "select": "email,failed_attempts,blocked_until",
+                "email": f"eq.{email}",
+                "limit": 1,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return {"email": email, "failed_attempts": 0, "blocked_until": None}
+
+        rows = resp.json()
+        if not rows:
+            return {"email": email, "failed_attempts": 0, "blocked_until": None}
+
+        row = rows[0]
+        return {
+            "email": email,
+            "failed_attempts": row.get("failed_attempts", 0),
+            "blocked_until": row.get("blocked_until"),
+        }
+    except Exception:
+        # Si algo falla, por seguridad, asumimos 0 intentos y sin bloqueo
+        return {"email": email, "failed_attempts": 0, "blocked_until": None}
+
+
+def save_block_info(email: str, attempts: int, blocked_until: datetime | None):
+    """
+    Guarda/actualiza el nº de intentos fallidos y la fecha de bloqueo.
+    Usa upsert por email.
+    """
+    rest_url, headers, _ = get_rest_info()
+    payload = [{
+        "email": email,
+        "failed_attempts": attempts,
+        "blocked_until": blocked_until.isoformat() if blocked_until else None,
+    }]
+
+    local_headers = headers.copy()
+    local_headers["Prefer"] = "resolution=merge-duplicates"
+
+    requests.post(
+        f"{rest_url}/login_security?on_conflict=email",
+        headers=local_headers,
+        json=payload,
+        timeout=10,
+    )
+
+
+def reset_failed_attempts(email: str):
+    """
+    Resetea contador de intentos y bloqueo.
+    Si no existe fila, la crea con 0 intentos y sin bloqueo.
+    """
+    rest_url, headers, _ = get_rest_info()
+    try:
+        # Intentamos parchear si existe
+        resp = requests.patch(
+            f"{rest_url}/login_security",
+            headers=headers,
+            params={"email": f"eq.{email}"},
+            json={"failed_attempts": 0, "blocked_until": None},
+            timeout=10,
+        )
+        # Si no ha modificado filas (por ejemplo, tabla vacía), hacemos upsert
+        if resp.status_code >= 400:
+            raise Exception("patch_error")
+        # Si quieres ser ultra-estricto, podrías comprobar resp.text por nº filas afectadas
+    except Exception:
+        # Fallback: upsert directo
+        save_block_info(email, 0, None)
+
+
+# ---------------------------------------------
+# LOGIN via SUPABASE AUTH (con límite de intentos)
+# ---------------------------------------------
 def login(email, password, anon_key):
     url = st.secrets["SUPABASE_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
 
@@ -605,50 +699,59 @@ def login(email, password, anon_key):
         "Content-Type": "application/json",
     }
 
-    # --- Leer info de seguridad del usuario ---
+    # --- Info de seguridad del usuario ---
     sec = load_user_security(email)
     ahora_utc = datetime.now(timezone.utc)
 
-    # Usuario bloqueado
+    # 1) Comprobar si está bloqueado
     blocked_until_raw = sec["blocked_until"]
     if blocked_until_raw:
         try:
-            # Convertir de texto ISO → datetime con timezone
+            # ISO de Supabase → datetime con tz UTC
             dt_blocked = datetime.fromisoformat(blocked_until_raw.replace("Z", "+00:00"))
-        except:
+        except Exception:
             dt_blocked = None
 
         if dt_blocked and dt_blocked > ahora_utc:
-            # Convertir UTC → Madrid
+            # Mostrar hora en Madrid (UTC+1 fijo; si quisieras DST, habría que meter zona IANA)
             dt_madrid = dt_blocked.astimezone(timezone(timedelta(hours=1)))
             hora_str = dt_madrid.strftime("%H:%M")
-            st.error(f"Usuario bloqueado por demasiados intentos fallidos. Podrás volver a intentarlo a las **{hora_str}**.")
+            st.error(
+                f"Usuario bloqueado por demasiados intentos fallidos. "
+                f"Podrás volver a intentarlo a las **{hora_str}**."
+            )
             return None
 
-    # --- Intento normal de login ---
+    # 2) Intento de login contra Supabase Auth
     resp = requests.post(url, headers=headers, json=payload)
 
     if resp.status_code == 200:
-        # Login correcto → resetear intentos
+        # Login correcto → reseteamos contador y bloqueo
         reset_failed_attempts(email)
         return resp.json()
 
-    # Login fallido → sumamos intento
+    # 3) Login fallido → incrementamos contador
     attempts = sec["failed_attempts"] + 1
 
     if attempts >= 4:
+        # Bloqueo 15 minutos desde ahora (UTC)
         blocked_until = ahora_utc + timedelta(minutes=15)
         save_block_info(email, attempts, blocked_until)
+
         dt_madrid = blocked_until.astimezone(timezone(timedelta(hours=1)))
         hora_str = dt_madrid.strftime("%H:%M")
-        st.error(f"Usuario bloqueado por demasiados intentos fallidos. Podrás volver a intentarlo a las **{hora_str}**.")
+
+        st.error(
+            f"Usuario bloqueado por demasiados intentos fallidos. "
+            f"Podrás volver a intentarlo a las **{hora_str}**."
+        )
         return None
     else:
+        # Solo actualizamos nº de intentos
         save_block_info(email, attempts, None)
         restantes = 4 - attempts
         st.error(f"Contraseña incorrecta. Te quedan **{restantes}** intentos.")
         return None
-
 
 # ---------------------------------------------
 # Cargar perfil (rol, plaza) desde app_users
@@ -2033,8 +2136,8 @@ def view_suplente(profile):
 # MAIN
 # ---------------------------------------------
 def main():
-    st.image("Logo_GLS.png", width=200)
-    st.title("Parking GLS KM0")
+    st.image("Logo_.png", width=200)
+    st.title("Parking KM0")
 
     rest_url, headers, anon_key = get_rest_info()
 
