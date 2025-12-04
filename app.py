@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import random
 import uuid
-from datetime import date, timedelta, datetime, time
+from datetime import date, timedelta, datetime, time, timezone
 
 st.set_page_config(
     page_title="Parking GLS",
@@ -597,81 +597,57 @@ def _get_login_state(email: str):
 
 
 def login(email, password, anon_key):
-    """
-    Login con:
-    - limitación a LOGIN_MAX_INTENTOS intentos fallidos
-    - bloqueo temporal de LOGIN_BLOQUEO_MINUTOS
-    - reseteo automático cuando el bloqueo caduca
-    """
-    state, key = _get_login_state(email)
-    ahora = datetime.now()
-
-    intentos = state.get("intentos_fallidos", 0)
-    bloqueado_hasta = state.get("bloqueado_hasta")
-
-    # 1) Si había bloqueo pero YA ha caducado, reseteamos todo
-    if bloqueado_hasta and bloqueado_hasta <= ahora:
-        intentos = 0
-        bloqueado_hasta = None
-
-    # 2) Si sigue bloqueado (bloqueado_hasta en el futuro), no dejamos ni probar
-    if bloqueado_hasta and bloqueado_hasta > ahora:
-        dt_madrid = dt_obj + timedelta(hours=1)
-        hora_str = dt_madrid.strftime("%H:%M")
-        st.error(
-            f"Usuario bloqueado por demasiados intentos fallidos. "
-            f"Vuelve a intentarlo a las **{hora_str}**."
-        )
-        # Guardar estado y salir
-        state["intentos_fallidos"] = intentos
-        state["bloqueado_hasta"] = bloqueado_hasta
-        st.session_state.login_states[key] = state
-        return None
-
-    # 3) Intentamos el login con Supabase
     url = st.secrets["SUPABASE_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
+
     payload = {"email": email, "password": password}
     headers = {
         "apikey": anon_key,
         "Content-Type": "application/json",
     }
 
+    # --- Leer info de seguridad del usuario ---
+    sec = load_user_security(email)
+    ahora_utc = datetime.now(timezone.utc)
+
+    # Usuario bloqueado
+    blocked_until_raw = sec["blocked_until"]
+    if blocked_until_raw:
+        try:
+            # Convertir de texto ISO → datetime con timezone
+            dt_blocked = datetime.fromisoformat(blocked_until_raw.replace("Z", "+00:00"))
+        except:
+            dt_blocked = None
+
+        if dt_blocked and dt_blocked > ahora_utc:
+            # Convertir UTC → Madrid
+            dt_madrid = dt_blocked.astimezone(timezone(timedelta(hours=1)))
+            hora_str = dt_madrid.strftime("%H:%M")
+            st.error(f"Usuario bloqueado por demasiados intentos fallidos. Podrás volver a intentarlo a las **{hora_str}**.")
+            return None
+
+    # --- Intento normal de login ---
     resp = requests.post(url, headers=headers, json=payload)
 
     if resp.status_code == 200:
-        # Login OK → reseteamos contador y bloqueo
-        state["intentos_fallidos"] = 0
-        state["bloqueado_hasta"] = None
-        st.session_state.login_states[key] = state
+        # Login correcto → resetear intentos
+        reset_failed_attempts(email)
         return resp.json()
 
-    # 4) Login incorrecto → incrementamos intentos y aplicamos lógica de bloqueo
-    intentos += 1
+    # Login fallido → sumamos intento
+    attempts = sec["failed_attempts"] + 1
 
-    if intentos >= LOGIN_MAX_INTENTOS:
-        # Bloqueo temporal
-        bloqueado_hasta = ahora + timedelta(minutes=LOGIN_BLOQUEO_MINUTOS)
-        state["intentos_fallidos"] = intentos
-        state["bloqueado_hasta"] = bloqueado_hasta
-        st.session_state.login_states[key] = state
-
-        st.error(
-            f"Usuario bloqueado por demasiados intentos fallidos. "
-            f"Vuelve a intentarlo en aproximadamente {LOGIN_BLOQUEO_MINUTOS} minutos."
-        )
+    if attempts >= 4:
+        blocked_until = ahora_utc + timedelta(minutes=15)
+        save_block_info(email, attempts, blocked_until)
+        dt_madrid = blocked_until.astimezone(timezone(timedelta(hours=1)))
+        hora_str = dt_madrid.strftime("%H:%M")
+        st.error(f"Usuario bloqueado por demasiados intentos fallidos. Podrás volver a intentarlo a las **{hora_str}**.")
+        return None
     else:
-        # Aún no bloqueado → mostramos intentos restantes
-        restantes = LOGIN_MAX_INTENTOS - intentos
-        state["intentos_fallidos"] = intentos
-        state["bloqueado_hasta"] = None
-        st.session_state.login_states[key] = state
-
-        st.error(
-            f"Email o contraseña incorrectos. "
-            f"Intentos restantes: {restantes}."
-        )
-
-    return None
+        save_block_info(email, attempts, None)
+        restantes = 4 - attempts
+        st.error(f"Contraseña incorrecta. Te quedan **{restantes}** intentos.")
+        return None
 
 
 # ---------------------------------------------
