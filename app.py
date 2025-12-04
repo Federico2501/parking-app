@@ -596,8 +596,6 @@ def _get_login_state(email: str):
     return state, key
 
 
-from datetime import datetime, timedelta, timezone
-
 # ---------------------------------------------
 # Tabla de seguridad de login (intentos y bloqueo)
 #   - Tabla en Supabase: login_security
@@ -2136,7 +2134,7 @@ def view_suplente(profile):
 # MAIN
 # ---------------------------------------------
 def main():
-    st.image("Logo_.png", width=200)
+    st.image("Logo_GLS.png", width=200)
     st.title("Parking KM0")
 
     rest_url, headers, anon_key = get_rest_info()
