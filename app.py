@@ -1230,7 +1230,7 @@ def view_suplente(profile):
     nombre = profile.get("nombre")
     st.write(f"Nombre: {nombre}")
 
-    # user_id
+    # user_id (uuid de Supabase Auth)
     auth = st.session_state.get("auth")
     if not auth:
         st.error("No se ha podido obtener información de usuario.")
@@ -1276,7 +1276,7 @@ def view_suplente(profile):
     st.write(f"Franjas utilizadas este mes: **{len(usadas_mes)}**")
 
     # ============================
-    # 2) Próximas reservas / solicitudes (tu agenda)
+    # 2) Próximas reservas / solicitudes (TU agenda)
     # ============================
     try:
         r = requests.get(
@@ -1458,33 +1458,31 @@ def view_suplente(profile):
             pass
 
     # ============================
-    # 5B) Solicitudes totales por fecha/franja (todos los usuarios, vía RPC)
+    # 5B) Solicitudes totales por fecha/franja (TODOS los usuarios)
     # ============================
     solicitudes_por_fr = defaultdict(int)
     try:
-        fechas_str = [d.isoformat() for d in dias_semana]
-        resp = requests.post(
-            f"{rest_url}/rpc/pre_reservas_agg",
+        r = requests.get(
+            f"{rest_url}/pre_reservas",
             headers=headers,
-            json={"_fechas": fechas_str},
+            params={
+                "select": "fecha,franja,estado",
+                "fecha": f"in.({fechas_filter})",
+                "estado": "in.(PENDIENTE,ASIGNADO)",
+            },
             timeout=10,
         )
-        if resp.status_code == 200:
-            data_agg = resp.json()
-            for row in data_agg:
-                try:
-                    if isinstance(row["fecha"], str):
-                        f_dia = date.fromisoformat(row["fecha"][:10])
-                    else:
-                        f_dia = row["fecha"]
-                except Exception:
-                    continue
-                fr = row["franja"]
-                cnt = row.get("solicitudes", 0)
-                solicitudes_por_fr[(f_dia, fr)] = cnt
-        # si no es 200, dejamos los contadores a 0 sin romper nada
+        agg_raw = r.json()
     except Exception:
-        pass
+        agg_raw = []
+
+    for row in agg_raw:
+        try:
+            f_dia = date.fromisoformat(row["fecha"][:10])
+            fr = row["franja"]
+            solicitudes_por_fr[(f_dia, fr)] += 1
+        except Exception:
+            pass
 
     # ============================
     # 6) UI – checkboxes + día completo + contadores
@@ -1580,7 +1578,6 @@ def view_suplente(profile):
                                 "Franja completa</span>",
                                 unsafe_allow_html=True,
                             )
-                            # contador
                             col.markdown(
                                 f"<span style='font-size:11px;color:#a00;'>"
                                 f"0 plazas</span> – {solicitudes_tot} solicitudes",
@@ -1604,7 +1601,6 @@ def view_suplente(profile):
                         else:
                             col.markdown("—")
 
-                        # Contador “X plazas – Y solicitudes”
                         color_plazas = "#0a0" if plazas_libres > 0 else "#a00"
                         col.markdown(
                             f"<span style='font-size:11px;color:{color_plazas};'>"
