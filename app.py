@@ -564,33 +564,70 @@ def reset_login_attempts(email: str):
         pass
 
 
+# Constantes globales (si no las tienes ya)
+LOGIN_MAX_INTENTOS = 4
+LOGIN_BLOQUEO_MINUTOS = 15
+
+def _get_login_state(email: str):
+    """
+    Devuelve/crea el estado de login para un email concreto:
+    - intentos_fallidos: int
+    - bloqueado_hasta: datetime o None
+    """
+    if "login_states" not in st.session_state:
+        st.session_state.login_states = {}
+
+    key = f"login_state_{email}"
+    state = st.session_state.login_states.get(key, {
+        "intentos_fallidos": 0,
+        "bloqueado_hasta": None,
+    })
+
+    # Normalizar bloqueado_hasta si viene como string
+    bloqueado_hasta = state.get("bloqueado_hasta")
+    if isinstance(bloqueado_hasta, str):
+        try:
+            bloqueado_hasta = datetime.fromisoformat(bloqueado_hasta)
+        except Exception:
+            bloqueado_hasta = None
+    state["bloqueado_hasta"] = bloqueado_hasta
+
+    st.session_state.login_states[key] = state
+    return state, key
+
+
 def login(email, password, anon_key):
     """
-    Login con control de intentos:
-      - Máx. MAX_INTENTOS fallos.
-      - Si se supera, bloquea durante BLOQUEO_MINUTOS.
-      - Devuelve:
-          * dict Supabase normal (con 'user') si OK
-          * {'blocked': True, 'blocked_until': ..., 'attempts': ...} si bloqueado
-          * {'attempts': n} si fallo pero sin bloqueo aún
-          * None si error gordo de conexión.
+    Login con:
+    - limitación a LOGIN_MAX_INTENTOS intentos fallidos
+    - bloqueo temporal de LOGIN_BLOQUEO_MINUTOS
+    - reseteo automático cuando el bloqueo caduca
     """
-    # 1) Comprobar estado de bloqueo / intentos
-    ahora = datetime.utcnow()
-    rec = get_login_attempt_record(email)
-    attempts_prev = rec.get("attempts", 0) if rec else 0
-    blocked_until_raw = rec.get("blocked_until") if rec else None
-    blocked_until = _parse_supabase_timestamp(blocked_until_raw)
+    state, key = _get_login_state(email)
+    ahora = datetime.now()
 
-    if blocked_until and blocked_until > ahora:
-        # Sigue bloqueado, no intentamos ni siquiera llamar a Auth
-        return {
-            "blocked": True,
-            "blocked_until": blocked_until,
-            "attempts": attempts_prev,
-        }
+    intentos = state.get("intentos_fallidos", 0)
+    bloqueado_hasta = state.get("bloqueado_hasta")
 
-    # 2) Intentar autenticar contra Supabase Auth
+    # 1) Si había bloqueo pero YA ha caducado, reseteamos todo
+    if bloqueado_hasta and bloqueado_hasta <= ahora:
+        intentos = 0
+        bloqueado_hasta = None
+
+    # 2) Si sigue bloqueado (bloqueado_hasta en el futuro), no dejamos ni probar
+    if bloqueado_hasta and bloqueado_hasta > ahora:
+        mins_rest = int((bloqueado_hasta - ahora).total_seconds() // 60) + 1
+        st.error(
+            f"Usuario bloqueado por demasiados intentos fallidos. "
+            f"Vuelve a intentarlo en aproximadamente {mins_rest} minutos."
+        )
+        # Guardar estado y salir
+        state["intentos_fallidos"] = intentos
+        state["bloqueado_hasta"] = bloqueado_hasta
+        st.session_state.login_states[key] = state
+        return None
+
+    # 3) Intentamos el login con Supabase
     url = st.secrets["SUPABASE_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
     payload = {"email": email, "password": password}
     headers = {
@@ -598,36 +635,42 @@ def login(email, password, anon_key):
         "Content-Type": "application/json",
     }
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=10)
-    except Exception:
-        # Error de red / servidor
-        return None
+    resp = requests.post(url, headers=headers, json=payload)
 
-    # 3) Login correcto → reseteamos intentos/bloqueo
     if resp.status_code == 200:
-        reset_login_attempts(email)
-        return resp.json()  # tokens + user
+        # Login OK → reseteamos contador y bloqueo
+        state["intentos_fallidos"] = 0
+        state["bloqueado_hasta"] = None
+        st.session_state.login_states[key] = state
+        return resp.json()
 
-    # 4) Login incorrecto → incrementar intentos
-    attempts_new = attempts_prev + 1
+    # 4) Login incorrecto → incrementamos intentos y aplicamos lógica de bloqueo
+    intentos += 1
 
-    if attempts_new >= MAX_INTENTOS:
-        # Bloqueo
-        bloquea_hasta = ahora + timedelta(minutes=BLOQUEO_MINUTOS)
-        update_login_attempt_record(email, attempts_new, bloquea_hasta)
-        return {
-            "blocked": True,
-            "blocked_until": bloquea_hasta,
-            "attempts": attempts_new,
-        }
+    if intentos >= LOGIN_MAX_INTENTOS:
+        # Bloqueo temporal
+        bloqueado_hasta = ahora + timedelta(minutes=LOGIN_BLOQUEO_MINUTOS)
+        state["intentos_fallidos"] = intentos
+        state["bloqueado_hasta"] = bloqueado_hasta
+        st.session_state.login_states[key] = state
+
+        st.error(
+            f"Usuario bloqueado por demasiados intentos fallidos. "
+            f"Vuelve a intentarlo en aproximadamente {LOGIN_BLOQUEO_MINUTOS} minutos."
+        )
     else:
-        # Solo incrementamos contador, sin bloqueo todavía
-        update_login_attempt_record(email, attempts_new, None)
-        return {
-            "attempts": attempts_new
-        }
+        # Aún no bloqueado → mostramos intentos restantes
+        restantes = LOGIN_MAX_INTENTOS - intentos
+        state["intentos_fallidos"] = intentos
+        state["bloqueado_hasta"] = None
+        st.session_state.login_states[key] = state
 
+        st.error(
+            f"Email o contraseña incorrectos. "
+            f"Intentos restantes: {restantes}."
+        )
+
+    return None
 
 
 # ---------------------------------------------
