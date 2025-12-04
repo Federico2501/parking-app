@@ -688,7 +688,40 @@ def reset_failed_attempts(email: str):
 # ---------------------------------------------
 # LOGIN via SUPABASE AUTH (con límite de intentos)
 # ---------------------------------------------
+MAX_LOGIN_ATTEMPTS = 4
+BLOCK_MINUTES = 15
+
+
 def login(email, password, anon_key):
+    """
+    Login con control de intentos fallidos por email.
+    - Tras 4 intentos fallidos seguidos, bloquea 15 minutos.
+    - El bloqueo aplica también aunque luego pongas la contraseña correcta.
+    - Los datos se guardan en st.session_state (por navegador / sesión).
+    """
+
+    # Inicializar estructura en sesión
+    if "login_security" not in st.session_state:
+        st.session_state.login_security = {}
+
+    # Recuperar estado de este email
+    sec = st.session_state.login_security.get(
+        email,
+        {"failed": 0, "blocked_until": None}
+    )
+
+    ahora = datetime.now()
+
+    # 1) ¿Está bloqueado todavía?
+    if sec["blocked_until"] is not None and ahora < sec["blocked_until"]:
+        desbloqueo = sec["blocked_until"]
+        st.error(
+            f"Usuario bloqueado por demasiados intentos fallidos. "
+            f"Podrás volver a intentarlo a las {desbloqueo.strftime('%H:%M')}."
+        )
+        return None
+
+    # 2) Intentar login normal contra Supabase
     url = st.secrets["SUPABASE_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
 
     payload = {"email": email, "password": password}
@@ -697,60 +730,32 @@ def login(email, password, anon_key):
         "Content-Type": "application/json",
     }
 
-    # --- Info de seguridad del usuario ---
-    sec = load_user_security(email)
-    ahora_utc = datetime.now(timezone.utc)
-
-    # 1) Comprobar si está bloqueado
-    blocked_until_raw = sec["blocked_until"]
-    if blocked_until_raw:
-        try:
-            # ISO de Supabase → datetime con tz UTC
-            dt_blocked = datetime.fromisoformat(blocked_until_raw.replace("Z", "+00:00"))
-        except Exception:
-            dt_blocked = None
-
-        if dt_blocked and dt_blocked > ahora_utc:
-            # Mostrar hora en Madrid (UTC+1 fijo; si quisieras DST, habría que meter zona IANA)
-            dt_madrid = dt_blocked.astimezone(timezone(timedelta(hours=1)))
-            hora_str = dt_madrid.strftime("%H:%M")
-            st.error(
-                f"Usuario bloqueado por demasiados intentos fallidos. "
-                f"Podrás volver a intentarlo a las **{hora_str}**."
-            )
-            return None
-
-    # 2) Intento de login contra Supabase Auth
     resp = requests.post(url, headers=headers, json=payload)
 
     if resp.status_code == 200:
-        # Login correcto → reseteamos contador y bloqueo
-        reset_failed_attempts(email)
-        return resp.json()
+        # ÉXITO → resetear contador y bloqueo
+        st.session_state.login_security[email] = {"failed": 0, "blocked_until": None}
+        return resp.json()  # tokens + user
 
-    # 3) Login fallido → incrementamos contador
-    attempts = sec["failed_attempts"] + 1
+    # 3) Fallo de credenciales → actualizar contador / bloqueo
+    sec["failed"] += 1
 
-    if attempts >= 4:
-        # Bloqueo 15 minutos desde ahora (UTC)
-        blocked_until = ahora_utc + timedelta(minutes=15)
-        save_block_info(email, attempts, blocked_until)
-
-        dt_madrid = blocked_until.astimezone(timezone(timedelta(hours=1)))
-        hora_str = dt_madrid.strftime("%H:%M")
-
+    if sec["failed"] >= MAX_LOGIN_ATTEMPTS:
+        sec["blocked_until"] = ahora + timedelta(minutes=BLOCK_MINUTES)
         st.error(
             f"Usuario bloqueado por demasiados intentos fallidos. "
-            f"Podrás volver a intentarlo a las **{hora_str}**."
+            f"Podrás volver a intentarlo a las {sec['blocked_until'].strftime('%H:%M']}."
         )
-        return None
     else:
-        # Solo actualizamos nº de intentos
-        save_block_info(email, attempts, None)
-        restantes = 4 - attempts
-        st.error(f"Contraseña incorrecta. Te quedan **{restantes}** intentos.")
-        return None
+        restantes = MAX_LOGIN_ATTEMPTS - sec["failed"]
+        st.error(
+            f"Email o contraseña incorrectos. "
+            f"Te quedan {restantes} intento(s) antes de bloquear la cuenta."
+        )
 
+    # Guardar estado actualizado
+    st.session_state.login_security[email] = sec
+    return None
 # ---------------------------------------------
 # Cargar perfil (rol, plaza) desde app_users
 # ---------------------------------------------
@@ -2153,61 +2158,20 @@ def main():
         password = st.text_input("Contraseña", type="password")
 
         if st.button("Entrar"):
+            # login() ya gestiona:
+            # - intentos fallidos
+            # - bloqueos y mensajes de error
+            # - reseteo de contadores al hacer login correcto
             auth_data = login(email, password, anon_key)
 
-            if auth_data is None:
-                # Caso extremo: error duro de conexión / servidor
-                st.error("No se ha podido conectar con el servidor de autenticación.")
-                return
-
-            # --- Usuario bloqueado por demasiados intentos ---
-            if isinstance(auth_data, dict) and auth_data.get("blocked"):
-                blocked_until = auth_data.get("blocked_until")
-                attempts = auth_data.get("attempts", 0)
-
-                if blocked_until:
-                    # Tiempo restante aprox en minutos
-                    ahora_utc = datetime.utcnow()
-                    delta = blocked_until - ahora_utc
-                    minutos_restantes = max(1, int(delta.total_seconds() // 60))
-                    st.error(
-                        f"Usuario bloqueado por demasiados intentos fallidos. "
-                        f"Vuelve a intentarlo en aproximadamente {minutos_restantes} minutos."
-                    )
-                else:
-                    st.error("Usuario bloqueado por intentos fallidos de login.")
-                return
-
-            # --- Login correcto (Supabase devuelve 'user') ---
-            if isinstance(auth_data, dict) and "user" in auth_data:
+            # Si login correcto, auth_data es el json de Supabase (con "user")
+            if auth_data:
                 st.session_state.auth = auth_data
                 st.success("Login correcto, cargando perfil…")
                 st.rerun()
-                return
 
-            # --- Login incorrecto pero sin bloqueo todavía ---
-            if isinstance(auth_data, dict):
-                attempts = auth_data.get("attempts")
-                if attempts is not None:
-                    try:
-                        restantes = max(0, MAX_INTENTOS - attempts)
-                    except NameError:
-                        # Por si algo raro con el import de MAX_INTENTOS
-                        restantes = None
-
-                    if restantes is not None:
-                        st.error(
-                            f"Email o contraseña incorrectos. "
-                            f"Intentos restantes antes de bloqueo: {restantes}."
-                        )
-                    else:
-                        st.error("Email o contraseña incorrectos.")
-                else:
-                    st.error("Email o contraseña incorrectos.")
-            else:
-                st.error("Email o contraseña incorrectos.")
-
-        return  # mientras no haya auth, no seguimos
+        # Mientras no haya auth, no seguimos
+        return
 
     # Ya hay sesión → coger user_id
     user = st.session_state.auth["user"]
