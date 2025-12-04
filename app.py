@@ -616,10 +616,10 @@ def login(email, password, anon_key):
 
     # 2) Si sigue bloqueado (bloqueado_hasta en el futuro), no dejamos ni probar
     if bloqueado_hasta and bloqueado_hasta > ahora:
-        mins_rest = int((bloqueado_hasta - ahora).total_seconds() // 60) + 1
+        hora_str = bloqueado_hasta.strftime("%H:%M")
         st.error(
             f"Usuario bloqueado por demasiados intentos fallidos. "
-            f"Vuelve a intentarlo en aproximadamente {mins_rest} minutos."
+            f"Vuelve a intentarlo a las **{hora_str}**.."
         )
         # Guardar estado y salir
         state["intentos_fallidos"] = intentos
