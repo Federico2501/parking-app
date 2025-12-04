@@ -3,6 +3,8 @@ import requests
 import pandas as pd
 import random
 import uuid
+import base64
+import json
 from datetime import date, timedelta, datetime, time, timezone
 
 st.set_page_config(
@@ -28,6 +30,44 @@ def get_rest_info():
     }
 
     return rest_url, headers, anon_key
+
+def _decode_jwt_payload(token: str) -> dict:
+    """
+    Decodifica SOLO el payload de un JWT sin verificar firma.
+    Nos sirve para leer 'exp', 'iss', 'aud', etc.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return {}
+
+        payload_b64 = parts[1]
+        # Añadimos padding si falta
+        padding = '=' * (-len(payload_b64) % 4)
+        payload_b64 += padding
+
+        payload_bytes = base64.urlsafe_b64decode(payload_b64.encode("utf-8"))
+        payload_str = payload_bytes.decode("utf-8")
+        return json.loads(payload_str)
+    except Exception:
+        return {}
+
+def is_jwt_expired(token: str) -> bool:
+    """
+    Devuelve True si el JWT está caducado o no se puede leer bien.
+    """
+    payload = _decode_jwt_payload(token)
+    if not payload:
+        # Si no podemos leer el token, por seguridad lo consideramos inválido
+        return True
+
+    exp = payload.get("exp")
+    if exp is None:
+        # Si el token no trae 'exp', lo consideramos válido (caso raro)
+        return False
+
+    now = int(time.time())
+    return now >= int(exp)
 
 def se_puede_modificar_slot(fecha_slot: date, accion: str) -> bool:
     """
@@ -1749,6 +1789,19 @@ def main():
                 st.rerun()
 
         # Mientras no haya auth, no seguimos
+        return
+    # ============================
+    # Validar que el JWT sigue siendo válido
+    # ============================
+    auth_data = st.session_state.auth
+    access_token = auth_data.get("access_token")
+
+    # Si no hay token o está caducado → forzar logout
+    if not access_token or is_jwt_expired(access_token):
+        st.warning("Tu sesión ha caducado. Por favor, vuelve a iniciar sesión.")
+        st.session_state.auth = None
+        st.session_state.profile = None
+        st.rerun()
         return
 
     # Ya hay sesión → coger user_id
