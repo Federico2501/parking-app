@@ -1461,6 +1461,7 @@ def view_suplente(profile):
 
     # ============================
     # 5B) NUEVO: solicitudes totales por fecha/franja (todos los usuarios)
+    #      -> sin filtro "estado" en Supabase, filtramos en Python
     # ============================
     try:
         r = requests.get(
@@ -1469,7 +1470,6 @@ def view_suplente(profile):
             params={
                 "select": "fecha,franja,estado",
                 "fecha": f"in.({','.join(d.isoformat() for d in dias_semana)})",
-                "estado": "in.(PENDIENTE,ASIGNADO)",
             },
             timeout=10,
         )
@@ -1796,6 +1796,7 @@ def view_suplente(profile):
             st.error("Error al guardar cambios.")
             st.code(str(e))
             return
+
 
 # ---------------------------------------------
 # MAIN
