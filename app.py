@@ -1250,6 +1250,11 @@ def view_suplente(profile):
     rest_url, headers, _ = get_rest_info()
     hoy = date.today()
 
+    # Headers autenticados como el usuario (para RLS en pre_reservas)
+    access_token = auth.get("access_token")
+    user_headers = headers.copy()
+    user_headers["Authorization"] = f"Bearer {access_token}"
+
     # ============================
     # 1) KPI uso mensual
     # ============================
@@ -1363,7 +1368,7 @@ def view_suplente(profile):
                 )
                 continue
 
-            # 2) Si no hay slot, miramos pre_reservas (PENDIENTE / ASIGNADO / RECHAZADO / lo que sea)
+            # 2) Si no hay slot, miramos pre_reservas
             est = pre_user.get((f, franja))
             if est is None:
                 est = "PENDIENTE"
@@ -1377,7 +1382,6 @@ def view_suplente(profile):
                     f"- {fecha_txt} – {fr_txt} – _Plaza asignada (pendiente)_"
                 )
             else:
-                # cualquier otro estado diferente de PENDIENTE/ASIGNADO
                 out_lines.append(
                     f"- {fecha_txt} – {fr_txt} – _Solicitud no aprobada_"
                 )
@@ -1642,7 +1646,7 @@ def view_suplente(profile):
                         ]
                         resp_full = requests.post(
                             f"{rest_url}/pre_reservas",
-                            headers=headers,
+                            headers=user_headers,
                             json=payload,
                             timeout=10,
                         )
@@ -1711,7 +1715,7 @@ def view_suplente(profile):
                                         try:
                                             r_patch = requests.patch(
                                                 f"{rest_url}/pre_reservas",
-                                                headers=headers,
+                                                headers=user_headers,
                                                 params={
                                                     "usuario_id": f"eq.{user_id}",
                                                     "fecha": f"eq.{d.isoformat()}",
@@ -1754,7 +1758,7 @@ def view_suplente(profile):
                             ]
                             resp_pre = requests.post(
                                 f"{rest_url}/pre_reservas",
-                                headers=headers,
+                                headers=user_headers,
                                 json=payload,
                                 timeout=10,
                             )
@@ -1768,7 +1772,7 @@ def view_suplente(profile):
                     if esta_pre:
                         resp_cancel = requests.patch(
                             f"{rest_url}/pre_reservas",
-                            headers=headers,
+                            headers=user_headers,
                             params={
                                 "usuario_id": f"eq.{user_id}",
                                 "fecha": f"eq.{d.isoformat()}",
@@ -1796,6 +1800,7 @@ def view_suplente(profile):
             st.error("Error inesperado al guardar cambios.")
             st.code(str(e))
             return
+
 
 
 # ---------------------------------------------
