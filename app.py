@@ -1381,6 +1381,10 @@ def view_suplente(profile):
                 out_lines.append(
                     f"- {fecha_txt} – {fr_txt} – _Plaza asignada (pendiente)_"
                 )
+            elif est == "RECHAZADO":
+                out_lines.append(
+                    f"- {fecha_txt} – {fr_txt} – _Solicitud no aprobada_"
+                )
             else:
                 out_lines.append(
                     f"- {fecha_txt} – {fr_txt} – _Solicitud no aprobada_"
@@ -1585,6 +1589,18 @@ def view_suplente(profile):
                             continue
 
                         estado_pre = pre_sem.get(key)
+
+                        # 🔴 Si la solicitud fue rechazada, solo mostramos mensaje
+                        if estado_pre == "RECHAZADO":
+                            col.markdown(
+                                "<span style='font-size:13px;color:#a00;'>"
+                                "Solicitud no aprobada</span>",
+                                unsafe_allow_html=True,
+                            )
+                            cambios[(d, fr)] = "NOACCION"
+                            continue
+
+                        # Para PENDIENTE / ASIGNADO
                         marc = estado_pre in ("PENDIENTE", "ASIGNADO")
 
                         if editable:
@@ -1638,7 +1654,7 @@ def view_suplente(profile):
                                 "usuario_id": user_id,
                                 "fecha": d.isoformat(),
                                 "franja": "T",
-                                "estado": "PENDIENTE",
+                                "estado": "PENDIENTENTE",
                                 "pack_id": pack_id,
                             },
                         ]
