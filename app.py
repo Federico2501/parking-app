@@ -1810,11 +1810,13 @@ def main():
 
     # Estado de sesión
     if "auth" not in st.session_state:
-        st.session_state.auth = None  # info de Supabase Auth
+        st.session_state.auth = None
     if "profile" not in st.session_state:
-        st.session_state.profile = None  # fila en app_users
+        st.session_state.profile = None
 
-    # Si NO hay sesión → formulario login
+    # ===============================
+    # 1) LOGIN
+    # ===============================
     if st.session_state.auth is None:
         st.subheader("Iniciar sesión")
 
@@ -1822,27 +1824,21 @@ def main():
         password = st.text_input("Contraseña", type="password")
 
         if st.button("Entrar"):
-            # login() ya gestiona:
-            # - intentos fallidos
-            # - bloqueos y mensajes de error
-            # - reseteo de contadores al hacer login correcto
             auth_data = login(email, password, anon_key)
 
-            # Si login correcto, auth_data es el json de Supabase (con "user")
             if auth_data:
                 st.session_state.auth = auth_data
                 st.success("Login correcto, cargando perfil…")
                 st.rerun()
 
-        # Mientras no haya auth, no seguimos
         return
-    # ============================
-    # Validar que el JWT sigue siendo válido
-    # ============================
+
+    # ===============================
+    # 2) Validar que el JWT está vivo
+    # ===============================
     auth_data = st.session_state.auth
     access_token = auth_data.get("access_token")
 
-    # Si no hay token o está caducado → forzar logout
     if not access_token or is_jwt_expired(access_token):
         st.warning("Tu sesión ha caducado. Por favor, vuelve a iniciar sesión.")
         st.session_state.auth = None
@@ -1850,17 +1846,18 @@ def main():
         st.rerun()
         return
 
-    # Ya hay sesión → coger user_id
+    # ===============================
+    # 3) Cargar datos del usuario
+    # ===============================
     user = st.session_state.auth["user"]
     user_id = user["id"]
     email = user["email"]
 
-    # Cargar perfil si aún no está
     if st.session_state.profile is None:
         profile = load_profile(user_id)
         if profile is None:
             st.error("No se ha encontrado un perfil en app_users para este usuario.")
-            st.info("Da de alta este usuario en la tabla app_users (con rol y plaza_id) y recarga.")
+            st.info("Da de alta este usuario en app_users (con rol y plaza_id) y recarga.")
             if st.button("Cerrar sesión"):
                 st.session_state.auth = None
                 st.session_state.profile = None
@@ -1870,7 +1867,43 @@ def main():
 
     profile = st.session_state.profile
 
-    # Cabecera común
+    # ===============================
+    # 4) AUTO-SORTEO GLOBAL (TODOS LOS USUARIOS)
+    # ===============================
+    try:
+        hoy = date.today()
+        fecha_manana = hoy + timedelta(days=1)
+        ahora = datetime.now().time()
+        limite = time(20, 0)
+
+        if ahora >= limite:
+            # Consultar pre_reservas pendientes para mañana
+            resp_pend = requests.get(
+                f"{rest_url}/pre_reservas",
+                headers=headers,
+                params={
+                    "select": "id",
+                    "fecha": f"eq.{fecha_manana.isoformat()}",
+                    "estado": "eq.PENDIENTE",
+                    "limit": 1,
+                },
+                timeout=10,
+            )
+
+            if resp_pend.status_code == 200 and resp_pend.json():
+                st.info(
+                    f"🔄 Ejecutando automáticamente el sorteo para mañana "
+                    f"({fecha_manana.strftime('%d/%m/%Y')})…"
+                )
+                ejecutar_sorteo(fecha_manana)
+
+    except Exception as e:
+        st.warning("No se ha podido ejecutar el sorteo automático.")
+        st.code(str(e))
+
+    # ===============================
+    # 5) Cabecera común
+    # ===============================
     st.success(f"Sesión iniciada como: {email}")
     st.write(f"Rol: **{profile['rol']}**")
 
@@ -1879,13 +1912,16 @@ def main():
         st.session_state.profile = None
         st.rerun()
 
-    # Bloque para cambiar la contraseña del usuario logueado
+    # Cambio de contraseña
     password_change_panel()
 
     st.markdown("---")
 
-    # Vista según rol
+    # ===============================
+    # 6) Vista según rol
+    # ===============================
     rol = profile["rol"]
+
     if rol == "ADMIN":
         view_admin(profile)
     elif rol == "TITULAR":
@@ -1895,6 +1931,3 @@ def main():
     else:
         st.error(f"Rol desconocido: {rol}")
 
-
-if __name__ == "__main__":
-    main()
