@@ -1394,7 +1394,7 @@ def view_suplente(profile):
     weekday = hoy.weekday()
 
     lunes_actual = hoy - timedelta(days=weekday)
-    semana_actual = [lunes_actual + timedelta(days	i) for i in range(5)]
+    semana_actual = [lunes_actual + timedelta(days=i) for i in range(5)]
 
     lunes_next = lunes_actual + timedelta(days=7)
     semana_next = [lunes_next + timedelta(days=i) for i in range(5)]
