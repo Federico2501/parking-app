@@ -1499,6 +1499,10 @@ def view_suplente(profile):
 
             editable = se_puede_modificar_slot(d, "reservar")
 
+            # plazas libres por franja para este día
+            disp_M = libres.get((d, "M"), 0)
+            disp_T = libres.get((d, "T"), 0)
+
             # Día completo
             key_full = f"full_{d.isoformat()}"
             default_full = (
@@ -1525,8 +1529,22 @@ def view_suplente(profile):
                     cols[3].markdown("—")
 
                 if full_checked:
-                    cols[1].markdown("_Incluida en día completo_")
-                    cols[2].markdown("_Incluida en día completo_")
+                    # Mostrar que ambas franjas van en día completo + plazas libres
+                    texto_M = "_Incluida en día completo_"
+                    texto_T = "_Incluida en día completo_"
+
+                    texto_M += (
+                        f"<br/><span style='font-size:11px;color:#0a0;'>"
+                        f"Plazas libres: {disp_M}</span>"
+                    )
+                    texto_T += (
+                        f"<br/><span style='font-size:11px;color:#0a0;'>"
+                        f"Plazas libres: {disp_T}</span>"
+                    )
+
+                    cols[1].markdown(texto_M, unsafe_allow_html=True)
+                    cols[2].markdown(texto_T, unsafe_allow_html=True)
+
                     cambios[(d, "FULL")] = "SOLICITAR"
                 else:
                     cambios[(d, "FULL")] = "NOFULL"
@@ -1545,7 +1563,7 @@ def view_suplente(profile):
                             cambios[(d, fr)] = "NOACCION"
                             continue
 
-                        # Plazas libres para cualquier día
+                        # Plazas libres para esta franja
                         disp = libres.get((d, fr), 0)
 
                         # Hoy sin plazas → franja completa
@@ -1578,7 +1596,6 @@ def view_suplente(profile):
                                 unsafe_allow_html=True,
                             )
                         else:
-                            # Futuro sin plazas
                             if not is_today:
                                 col.markdown(
                                     "<span style='font-size:11px;color:#a00;'>"
@@ -1674,7 +1691,6 @@ def view_suplente(profile):
                                         timeout=10,
                                     )
 
-                                    # Actualizar pre-reserva si existía
                                     if esta_pre:
                                         try:
                                             requests.patch(
