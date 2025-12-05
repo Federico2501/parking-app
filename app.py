@@ -1810,11 +1810,15 @@ def main():
 
     # Estado de sesión
     if "auth" not in st.session_state:
-        st.session_state.auth = None  # info de Supabase Auth
+        st.session_state.auth = None
     if "profile" not in st.session_state:
-        st.session_state.profile = None  # fila en app_users
+        st.session_state.profile = None
+    if "last_auto_draw_date" not in st.session_state:
+        st.session_state.last_auto_draw_date = None   # ← controla que no se repita el sorteo
 
-    # Si NO hay sesión → formulario login
+    # ≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈
+    # LOGIN
+    # ≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈
     if st.session_state.auth is None:
         st.subheader("Iniciar sesión")
 
@@ -1822,28 +1826,19 @@ def main():
         password = st.text_input("Contraseña", type="password")
 
         if st.button("Entrar"):
-            # login() ya gestiona:
-            # - intentos fallidos
-            # - bloqueos y mensajes de error
-            # - reseteo de contadores al hacer login correcto
             auth_data = login(email, password, anon_key)
-
-            # Si login correcto, auth_data es el json de Supabase (con "user")
             if auth_data:
                 st.session_state.auth = auth_data
                 st.success("Login correcto, cargando perfil…")
                 st.rerun()
-
-        # Mientras no haya auth, no seguimos
         return
 
-    # ============================
-    # Validar que el JWT sigue siendo válido
-    # ============================
+    # ≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈
+    # VALIDAR TOKEN
+    # ≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈
     auth_data = st.session_state.auth
     access_token = auth_data.get("access_token")
 
-    # Si no hay token o está caducado → forzar logout
     if not access_token or is_jwt_expired(access_token):
         st.warning("Tu sesión ha caducado. Por favor, vuelve a iniciar sesión.")
         st.session_state.auth = None
@@ -1851,8 +1846,7 @@ def main():
         st.rerun()
         return
 
-    # Ya hay sesión → coger user_id
-    user = st.session_state.auth["user"]
+    user = auth_data["user"]
     user_id = user["id"]
     email = user["email"]
 
@@ -1861,7 +1855,7 @@ def main():
         profile = load_profile(user_id)
         if profile is None:
             st.error("No se ha encontrado un perfil en app_users para este usuario.")
-            st.info("Da de alta este usuario en la tabla app_users (con rol y plaza_id) y recarga.")
+            st.info("Da de alta este usuario en app_users y recarga.")
             if st.button("Cerrar sesión"):
                 st.session_state.auth = None
                 st.session_state.profile = None
@@ -1871,7 +1865,27 @@ def main():
 
     profile = st.session_state.profile
 
+    # ----------------------------------------------------------
+    # 🔥 EJECUCIÓN AUTOMÁTICA DEL SORTEO A PARTIR DE LAS 20:00
+    # ----------------------------------------------------------
+    hoy = date.today()
+    ahora = datetime.now().time()
+    limite = time(20, 0)
+    fecha_sorteo = hoy + timedelta(days=1)
+
+    # ¿Ya se ejecutó hoy automáticamente?
+    ya_ejecutado_hoy = (st.session_state.last_auto_draw_date == hoy)
+
+    if ahora >= limite and not ya_ejecutado_hoy:
+        st.info("⏳ Ejecutando sorteo automático…")
+        ejecutar_sorteo(fecha_sorteo)
+        st.session_state.last_auto_draw_date = hoy
+        st.rerun()
+        return
+
+    # ----------------------------------------------------------
     # Cabecera común
+    # ----------------------------------------------------------
     st.success(f"Sesión iniciada como: {email}")
     st.write(f"Rol: **{profile['rol']}**")
 
@@ -1880,12 +1894,13 @@ def main():
         st.session_state.profile = None
         st.rerun()
 
-    # Bloque para cambiar la contraseña del usuario logueado
     password_change_panel()
 
     st.markdown("---")
 
-    # Vista según rol
+    # ----------------------------------------------------------
+    # VISTA SEGÚN ROL
+    # ----------------------------------------------------------
     rol = profile["rol"]
     if rol == "ADMIN":
         view_admin(profile)
@@ -1895,7 +1910,10 @@ def main():
         view_suplente(profile)
     else:
         st.error(f"Rol desconocido: {rol}")
+
+
+# ---------------------------------------------
+# EJECUCIÓN REAL DEL PROGRAMA
+# ---------------------------------------------
 if __name__ == "__main__":
     main()
-
-
