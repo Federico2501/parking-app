@@ -517,9 +517,12 @@ def login(email, password, anon_key):
     # -------------------------
     url = st.secrets["SUPABASE_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
     payload = {"email": email, "password": password}
+
     headers = {
         "apikey": anon_key,
+        "Authorization": f"Bearer {anon_key}",   # <<< IMPORTANTE
         "Content-Type": "application/json",
+        "Accept": "application/json",
     }
 
     try:
@@ -529,7 +532,14 @@ def login(email, password, anon_key):
         st.code(str(e))
         return None
 
-    # -------------------------
+    # ================================
+    # DEBUG TEMPORAL: VER LA RESPUESTA REAL
+    # ================================
+    if resp.status_code != 200:
+        st.warning(f"DEBUG auth: status={resp.status_code}")
+        # mostramos solo los primeros 500 caracteres
+        st.code(resp.text[:500])
+    # ================================
     # 3) Login correcto
     # -------------------------
     if resp.status_code == 200:
