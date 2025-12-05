@@ -1324,7 +1324,7 @@ def view_suplente(profile):
     try:
         r = requests.get(
             f"{rest_url}/pre_reservas",
-            headers=headers,
+            headers=user_headers,   # <-- IMPORTANTE: leer con user_headers
             params={
                 "select": "fecha,franja,estado",
                 "usuario_id": f"eq.{user_id}",
@@ -1394,7 +1394,7 @@ def view_suplente(profile):
     weekday = hoy.weekday()
 
     lunes_actual = hoy - timedelta(days=weekday)
-    semana_actual = [lunes_actual + timedelta(days=i) for i in range(5)]
+    semana_actual = [lunes_actual + timedelta(days	i) for i in range(5)]
 
     lunes_next = lunes_actual + timedelta(days=7)
     semana_next = [lunes_next + timedelta(days=i) for i in range(5)]
@@ -1454,7 +1454,7 @@ def view_suplente(profile):
     try:
         r = requests.get(
             f"{rest_url}/pre_reservas",
-            headers=headers,
+            headers=user_headers,   # <-- IMPORTANTE: también aquí
             params={
                 "select": "fecha,franja,estado,pack_id",
                 "usuario_id": f"eq.{user_id}",
@@ -1540,7 +1540,6 @@ def view_suplente(profile):
                     cols[3].markdown("—")
 
                 if full_checked:
-                    # Mostrar que ambas franjas van en día completo + plazas libres
                     texto_M = "_Incluida en día completo_"
                     texto_T = "_Incluida en día completo_"
 
@@ -1597,7 +1596,6 @@ def view_suplente(profile):
                         else:
                             col.markdown("—")
 
-                        # Mostrar plazas libres SIEMPRE
                         if disp > 0:
                             col.markdown(
                                 f"<span style='font-size:11px;color:#0a0;'>"
@@ -1800,8 +1798,6 @@ def view_suplente(profile):
             st.error("Error inesperado al guardar cambios.")
             st.code(str(e))
             return
-
-
 
 # ---------------------------------------------
 # MAIN
