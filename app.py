@@ -1895,5 +1895,7 @@ def main():
         view_suplente(profile)
     else:
         st.error(f"Rol desconocido: {rol}")
+if __name__ == "__main__":
+    main()
 
 
