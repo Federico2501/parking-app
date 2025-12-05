@@ -1615,6 +1615,7 @@ def view_suplente(profile):
     # ============================
     st.markdown("---")
     if st.button("💾 Guardar cambios"):
+        errores = []
         try:
             for (d, fr) in cambios:
                 accion = cambios[(d, fr)]
@@ -1639,12 +1640,17 @@ def view_suplente(profile):
                                 "pack_id": pack_id,
                             },
                         ]
-                        requests.post(
+                        resp_full = requests.post(
                             f"{rest_url}/pre_reservas",
                             headers=headers,
                             json=payload,
                             timeout=10,
                         )
+                        if resp_full.status_code >= 400:
+                            errores.append(
+                                f"Error creando pre-reservas de día completo para {d}: "
+                                f"{resp_full.status_code} – {resp_full.text}"
+                            )
                     continue
 
                 # Franjas individuales
@@ -1695,10 +1701,15 @@ def view_suplente(profile):
                                         json=payload_slot,
                                         timeout=10,
                                     )
+                                    if r_upd.status_code >= 400:
+                                        errores.append(
+                                            f"Error reservando hoy {d} {f}: "
+                                            f"{r_upd.status_code} – {r_upd.text}"
+                                        )
 
                                     if esta_pre:
                                         try:
-                                            requests.patch(
+                                            r_patch = requests.patch(
                                                 f"{rest_url}/pre_reservas",
                                                 headers=headers,
                                                 params={
@@ -1710,13 +1721,25 @@ def view_suplente(profile):
                                                 json={"estado": "ASIGNADO"},
                                                 timeout=10,
                                             )
-                                        except Exception:
-                                            pass
+                                            if r_patch.status_code >= 400:
+                                                errores.append(
+                                                    f"Error actualizando pre-reserva hoy {d} {f}: "
+                                                    f"{r_patch.status_code} – {r_patch.text}"
+                                                )
+                                        except Exception as e:
+                                            errores.append(
+                                                f"Excepción al actualizar pre-reserva hoy {d} {f}: {e}"
+                                            )
                                 else:
                                     st.warning(
                                         f"No queda hueco disponible en la franja "
                                         f"{'08-14' if f == 'M' else '14-20'}."
                                     )
+                            else:
+                                errores.append(
+                                    f"Error buscando plaza libre hoy {d} {f}: "
+                                    f"{resp_libre.status_code} – {resp_libre.text}"
+                                )
 
                     # Futuro → solo pre-reserva
                     else:
@@ -1729,16 +1752,21 @@ def view_suplente(profile):
                                     "estado": "PENDIENTE",
                                 }
                             ]
-                            requests.post(
+                            resp_pre = requests.post(
                                 f"{rest_url}/pre_reservas",
                                 headers=headers,
                                 json=payload,
                                 timeout=10,
                             )
+                            if resp_pre.status_code >= 400:
+                                errores.append(
+                                    f"Error creando pre-reserva para {d} {f}: "
+                                    f"{resp_pre.status_code} – {resp_pre.text}"
+                                )
 
                 elif accion == "NOACCION":
                     if esta_pre:
-                        requests.patch(
+                        resp_cancel = requests.patch(
                             f"{rest_url}/pre_reservas",
                             headers=headers,
                             params={
@@ -1750,14 +1778,25 @@ def view_suplente(profile):
                             json={"estado": "CANCELADO"},
                             timeout=10,
                         )
+                        if resp_cancel.status_code >= 400:
+                            errores.append(
+                                f"Error cancelando pre-reserva para {d} {f}: "
+                                f"{resp_cancel.status_code} – {resp_cancel.text}"
+                            )
 
-            st.success("Cambios guardados correctamente.")
-            st.rerun()
+            if errores:
+                st.error("Se han producido errores al guardar las solicitudes:")
+                for e in errores:
+                    st.code(e)
+            else:
+                st.success("Cambios guardados correctamente.")
+                st.rerun()
 
         except Exception as e:
-            st.error("Error al guardar cambios.")
+            st.error("Error inesperado al guardar cambios.")
             st.code(str(e))
             return
+
 
 # ---------------------------------------------
 # MAIN
