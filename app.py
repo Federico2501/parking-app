@@ -1290,7 +1290,7 @@ def view_suplente(profile):
     st.write(f"Franjas utilizadas este mes: **{len(usadas_mes)}**")
 
     # ============================
-    # 2) Próximas reservas / solicitudes
+    # 2) Próximas reservas / solicitudes (agenda completa futura)
     # ============================
     try:
         r = requests.get(
@@ -1350,32 +1350,39 @@ def view_suplente(profile):
     if not claves:
         st.markdown("_No tienes reservas ni solicitudes futuras._")
     else:
-        out = []
+        out_lines = []
         for (f, franja) in claves:
             fr_txt = "08 - 14" if franja == "M" else "14 - 20"
             fecha_txt = f.strftime("%a %d/%m")
 
+            # 1) Si ya hay slot asignado, prioridad absoluta
             if (f, franja) in slots_user:
                 plaza = slots_user[(f, franja)]
-                out.append(
+                out_lines.append(
                     f"- {fecha_txt} – {fr_txt} – Plaza **P-{plaza}** (asignada)"
                 )
-            else:
-                est = pre_user.get((f, franja), "PENDIENTE")
-                if est == "PENDIENTE":
-                    out.append(
-                        f"- {fecha_txt} – {fr_txt} – _Solicitud pendiente de plaza_"
-                    )
-                elif est == "ASIGNADO":
-                    out.append(
-                        f"- {fecha_txt} – {fr_txt} – _Plaza asignada (pendiente)_"
-                    )
-                elif est == "RECHAZADO":
-                    out.append(
-                        f"- {fecha_txt} – {fr_txt} – _Solicitud no aprobada_"
-                    )
+                continue
 
-        st.markdown("\n".join(out))
+            # 2) Si no hay slot, miramos pre_reservas (PENDIENTE / ASIGNADO / RECHAZADO / lo que sea)
+            est = pre_user.get((f, franja))
+            if est is None:
+                est = "PENDIENTE"
+
+            if est == "PENDIENTE":
+                out_lines.append(
+                    f"- {fecha_txt} – {fr_txt} – _Solicitud pendiente de plaza_"
+                )
+            elif est == "ASIGNADO":
+                out_lines.append(
+                    f"- {fecha_txt} – {fr_txt} – _Plaza asignada (pendiente)_"
+                )
+            else:
+                # cualquier otro estado diferente de PENDIENTE/ASIGNADO
+                out_lines.append(
+                    f"- {fecha_txt} – {fr_txt} – _Solicitud no aprobada_"
+                )
+
+        st.markdown("\n".join(out_lines))
 
     # ============================
     # 3) Semana inteligente
@@ -1549,9 +1556,7 @@ def view_suplente(profile):
                 else:
                     cambios[(d, "FULL")] = "NOFULL"
 
-                    # ============================
                     # Franjas individuales
-                    # ============================
                     for fr_idx, fr in enumerate(["M", "T"], start=1):
                         col = cols[fr_idx]
                         key = (d, fr)
