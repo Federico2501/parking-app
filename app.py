@@ -1240,7 +1240,7 @@ def view_suplente(profile):
     nombre = profile.get("nombre")
     st.write(f"Nombre: {nombre}")
 
-    # user_id
+    # user_id autenticado
     auth = st.session_state.get("auth")
     if not auth:
         st.error("No se ha podido obtener información de usuario.")
@@ -1251,7 +1251,7 @@ def view_suplente(profile):
     hoy = date.today()
 
     # ============================
-    # 1) KPI de uso mensual
+    # 1) KPI uso mensual
     # ============================
     first_day = hoy.replace(day=1)
     next_month_first = (
@@ -1290,7 +1290,7 @@ def view_suplente(profile):
     st.write(f"Franjas utilizadas este mes: **{len(usadas_mes)}**")
 
     # ============================
-    # 2) Próximas reservas / solicitudes (agenda completa futura)
+    # 2) Próximas reservas / solicitudes
     # ============================
     try:
         r = requests.get(
@@ -1380,7 +1380,7 @@ def view_suplente(profile):
     # ============================
     # 3) Semana inteligente
     # ============================
-    weekday = hoy.weekday()  # 0 lunes ... 6 domingo
+    weekday = hoy.weekday()
 
     lunes_actual = hoy - timedelta(days=weekday)
     semana_actual = [lunes_actual + timedelta(days=i) for i in range(5)]
@@ -1417,8 +1417,8 @@ def view_suplente(profile):
 
     from collections import defaultdict
 
-    libres = defaultdict(int)       # (fecha,franja) -> nº plazas cedidas libres
-    reservas_user_sem = {}         # (fecha,franja) -> plaza_id usuario
+    libres = defaultdict(int)
+    reservas_user_sem = {}
 
     for s in slots_raw:
         try:
@@ -1438,7 +1438,7 @@ def view_suplente(profile):
             libres[(f, fr)] += 1
 
     # ============================
-    # 5) Pre-reservas de semana (usuario actual)
+    # 5) Pre-reservas de semana
     # ============================
     try:
         r = requests.get(
@@ -1470,7 +1470,7 @@ def view_suplente(profile):
             pass
 
     # ============================
-    # 6) UI tipo TITULAR (checkboxes + día completo)
+    # 6) UI tipo titular: checkboxes
     # ============================
     st.markdown("### Selecciona las franjas que deseas solicitar:")
 
@@ -1484,45 +1484,30 @@ def view_suplente(profile):
 
     for d in dias_semana:
         is_today = (d == hoy)
-        bg = (
-            "background-color:rgba(0,123,255,0.08); "
-            "border-radius:6px; padding:3px;"
-            if is_today
-            else ""
-        )
 
         with st.container():
-            st.markdown(f"<div style='{bg}'>", unsafe_allow_html=True)
             cols = st.columns(4)
             cols[0].write(d.strftime("%a %d/%m"))
 
-            # Estado BD actual
             slot_M = reservas_user_sem.get((d, "M"))
             slot_T = reservas_user_sem.get((d, "T"))
 
             pre_M = pre_sem.get((d, "M"))
             pre_T = pre_sem.get((d, "T"))
 
-            tiene_slot_M = slot_M is not None
-            tiene_slot_T = slot_T is not None
+            adjud_full = slot_M is not None and slot_T is not None
 
-            # FULL DAY adjudicado
-            adjud_full = tiene_slot_M and tiene_slot_T
-
-            # Puede modificar este día?
             editable = se_puede_modificar_slot(d, "reservar")
 
-            # ----------------------------
-            # Día completo checkbox
-            # ----------------------------
+            # Día completo
             key_full = f"full_{d.isoformat()}"
             default_full = (
                 pre_M is not None
                 and pre_T is not None
                 and pre_M != "RECHAZADO"
                 and pre_T != "RECHAZADO"
-                and not tiene_slot_M
-                and not tiene_slot_T
+                and slot_M is None
+                and slot_T is None
             )
 
             if adjud_full:
@@ -1546,39 +1531,35 @@ def view_suplente(profile):
                 else:
                     cambios[(d, "FULL")] = "NOFULL"
 
-                    # ----------------------------
+                    # ============================
                     # Franjas individuales
-                    # ----------------------------
+                    # ============================
                     for fr_idx, fr in enumerate(["M", "T"], start=1):
                         col = cols[fr_idx]
                         key = (d, fr)
 
-                        # Ya tiene slot adjudicado en esa franja
+                        # Si ya tiene plaza asignada
                         if (d, fr) in reservas_user_sem:
                             plaza = reservas_user_sem[(d, fr)]
                             col.markdown(f"🟩 Adjudicada P-{plaza}")
                             cambios[(d, fr)] = "NOACCION"
                             continue
 
-                        # Huecos libres para HOY
-                        disp_hoy = libres.get((d, fr), 0) if is_today else None
+                        # Plazas libres para cualquier día
+                        disp = libres.get((d, fr), 0)
 
-                        # Si es HOY y la franja está completa -> solo texto, sin checkbox
-                        if is_today and disp_hoy == 0:
+                        # Hoy sin plazas → franja completa
+                        if is_today and disp == 0:
                             col.markdown(
                                 "<span style='font-size:11px;color:#a00;'>"
-                                "Franja completa</span>",
+                                "Franja completa (0 plazas libres)</span>",
                                 unsafe_allow_html=True,
                             )
                             cambios[(d, fr)] = "NOACCION"
                             continue
 
-                        # Estado de pre-reserva
                         estado_pre = pre_sem.get(key)
-                        if estado_pre in ("PENDIENTE", "ASIGNADO"):
-                            marc = True
-                        else:
-                            marc = False
+                        marc = estado_pre in ("PENDIENTE", "ASIGNADO")
 
                         if editable:
                             marc = col.checkbox(
@@ -1589,17 +1570,23 @@ def view_suplente(profile):
                         else:
                             col.markdown("—")
 
-                        # Info adicional SOLO HOY si hay huecos
-                        if is_today and disp_hoy and disp_hoy > 0:
+                        # Mostrar plazas libres SIEMPRE
+                        if disp > 0:
                             col.markdown(
                                 f"<span style='font-size:11px;color:#0a0;'>"
-                                f"Huecos libres hoy: {disp_hoy}</span>",
+                                f"Plazas libres: {disp}</span>",
                                 unsafe_allow_html=True,
                             )
+                        else:
+                            # Futuro sin plazas
+                            if not is_today:
+                                col.markdown(
+                                    "<span style='font-size:11px;color:#a00;'>"
+                                    "Plazas libres: 0</span>",
+                                    unsafe_allow_html=True,
+                                )
 
                         cambios[(d, fr)] = "SOLICITAR" if marc else "NOACCION"
-
-            st.markdown("</div>", unsafe_allow_html=True)
 
     # ============================
     # 7) Guardar cambios
@@ -1638,13 +1625,13 @@ def view_suplente(profile):
                         )
                     continue
 
-                # Franjas sueltas
+                # Franjas individuales
                 f = fr
                 esta_pre = (d, f) in pre_sem
                 esta_slot = (d, f) in reservas_user_sem
 
                 if accion == "SOLICITAR":
-                    # HOY -> reserva directa si hay plaza cedida libre
+                    # Hoy → reserva inmediata
                     if d == hoy:
                         if not esta_slot:
                             resp_libre = requests.get(
@@ -1661,10 +1648,7 @@ def view_suplente(profile):
                                 },
                                 timeout=10,
                             )
-                            if resp_libre.status_code != 200:
-                                st.error("Error al buscar plaza libre para hoy.")
-                                st.code(resp_libre.text)
-                            else:
+                            if resp_libre.status_code == 200:
                                 libres_hoy = resp_libre.json()
                                 if libres_hoy:
                                     plaza_id = libres_hoy[0]["plaza_id"]
@@ -1689,13 +1673,8 @@ def view_suplente(profile):
                                         json=payload_slot,
                                         timeout=10,
                                     )
-                                    if r_upd.status_code >= 400:
-                                        st.error(
-                                            "Supabase ha devuelto un error al reservar hoy."
-                                        )
-                                        st.code(r_upd.text)
 
-                                    # Si había pre_reserva PENDIENTE para hoy, marcarla ASIGNADO
+                                    # Actualizar pre-reserva si existía
                                     if esta_pre:
                                         try:
                                             requests.patch(
@@ -1714,10 +1693,11 @@ def view_suplente(profile):
                                             pass
                                 else:
                                     st.warning(
-                                        f"No queda hueco disponible para hoy en la franja "
+                                        f"No queda hueco disponible en la franja "
                                         f"{'08-14' if f == 'M' else '14-20'}."
                                     )
-                    # FUTURO -> solo pre_reserva si no existía nada
+
+                    # Futuro → solo pre-reserva
                     else:
                         if not esta_pre and not esta_slot:
                             payload = [
