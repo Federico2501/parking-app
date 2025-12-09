@@ -1654,7 +1654,7 @@ def view_suplente(profile):
                                 "usuario_id": user_id,
                                 "fecha": d.isoformat(),
                                 "franja": "T",
-                                "estado": "PENDIENTENTE",
+                                "estado": "PENDIENTE",
                                 "pack_id": pack_id,
                             },
                         ]
