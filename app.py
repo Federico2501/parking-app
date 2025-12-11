@@ -1302,7 +1302,6 @@ def view_titular(profile):
     # MODO VACACIONES (rango libre hasta 4 semanas)
     # ---------------------------
     with st.expander("Modo vacaciones (ceder plaza automáticamente por rango de fechas)"):
-        # Podemos tirar otra vez de get_rest_info sin romper nada
         rest_url, headers, _ = get_rest_info()
 
         hoy_vac = date.today()
@@ -1314,32 +1313,42 @@ def view_titular(profile):
         )
 
         col_v1, col_v2 = st.columns(2)
+
+        # Fecha inicio
         vac_ini = col_v1.date_input(
-            "Inicio vacaciones",
+            "Fecha inicio de vacaciones",
             value=hoy_vac,
             min_value=hoy_vac,
             max_value=max_vac_date,
             key="vac_ini_titular",
         )
 
+        # Valor por defecto / previo de la fecha fin
         default_fin = vac_ini + timedelta(days=4)
-        if default_fin > max_vac_date:
-            default_fin = max_vac_date
+        if "vac_fin_titular" in st.session_state:
+            prev_fin = st.session_state["vac_fin_titular"]
+            # Ajustamos por si se ha quedado fuera del rango general
+            if prev_fin < hoy_vac:
+                prev_fin = hoy_vac
+            if prev_fin > max_vac_date:
+                prev_fin = max_vac_date
+            default_fin = prev_fin
 
+        # Fecha fin (min_value fijo para evitar excepciones de Streamlit)
         vac_fin = col_v2.date_input(
-            "Fin vacaciones",
+            "Fecha fin de vacaciones",
             value=default_fin,
-            min_value=vac_ini,
+            min_value=hoy_vac,
             max_value=max_vac_date,
             key="vac_fin_titular",
         )
 
         if vac_fin < vac_ini:
-            st.error("La fecha fin de vacaciones no puede ser anterior al inicio.")
+            st.warning("La fecha fin es anterior al inicio. Ajusta el rango antes de aplicar.")
 
         if st.button("Aplicar modo vacaciones en este rango", key="btn_vacaciones_titular"):
             if vac_fin < vac_ini:
-                st.error("Rango de fechas no válido.")
+                st.error("Rango de fechas no válido: la fecha fin no puede ser anterior al inicio.")
             else:
                 errores_vac = []
                 franjas_afectadas = 0
@@ -1390,7 +1399,7 @@ def view_titular(profile):
                         f"Franjas cedidas en el rango: {franjas_afectadas}."
                     )
                     st.rerun()
-    
+  
     # ---------------------------
     # GUARDAR CAMBIOS
     # ---------------------------
