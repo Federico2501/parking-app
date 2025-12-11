@@ -801,7 +801,7 @@ def view_admin(profile):
     # ---------------------------
     # 5) Tablero visual (solo semana visible)
     # ---------------------------
-    st.markdown("### Ocupación por día (tablero 100 plazas)")
+    st.markdown("### Ocupación por día (tablero 50 plazas)")
 
     dia_seleccionado = st.selectbox(
         "Selecciona día",
@@ -925,6 +925,106 @@ def view_admin(profile):
     else:
         st.info("No hay datos disponibles.")
 
+    # ---------------------------
+    # 7) 🏖️ Modo vacaciones (ADMIN)
+    # ---------------------------
+    st.markdown("### 🏖️ Modo vacaciones (forzar cesión de plaza)")
+
+    with st.expander("Forzar cesión de plaza de un titular en un rango de fechas"):
+        # Titulares con plaza asignada
+        titulares_con_plaza = [
+            u for u in usuarios
+            if u.get("rol") == "TITULAR" and u.get("plaza_id") is not None
+        ]
+
+        if not titulares_con_plaza:
+            st.info("No hay titulares con plaza asignada.")
+        else:
+            opciones_tit = {
+                f"P-{u['plaza_id']} – {u['nombre']}": u
+                for u in titulares_con_plaza
+            }
+
+            seleccion = st.selectbox(
+                "Selecciona titular",
+                options=list(opciones_tit.keys()),
+                key="vac_titular",
+            )
+
+            fecha_inicio = st.date_input(
+                "Fecha inicio",
+                value=hoy,
+                min_value=hoy,
+                key="vac_fini",
+            )
+
+            fecha_fin = st.date_input(
+                "Fecha fin",
+                value=hoy + timedelta(days=5),
+                min_value=fecha_inicio,
+                key="vac_ffin",
+            )
+
+            solo_laborables = st.checkbox(
+                "Solo lunes a viernes",
+                value=True,
+                key="vac_laborables",
+            )
+
+            if st.button("Aplicar modo vacaciones", key="btn_vacaciones"):
+                if fecha_fin < fecha_inicio:
+                    st.error("La fecha fin no puede ser anterior a la fecha inicio.")
+                else:
+                    titular_sel = opciones_tit[seleccion]
+                    plaza_id_vac = titular_sel["plaza_id"]
+
+                    try:
+                        local_headers = headers.copy()
+                        local_headers["Prefer"] = "resolution=merge-duplicates"
+
+                        dia = fecha_inicio
+                        total_franjas = 0
+
+                        while dia <= fecha_fin:
+                            # Saltar fines de semana si se ha marcado "solo laborables"
+                            if solo_laborables and dia.weekday() > 4:
+                                dia += timedelta(days=1)
+                                continue
+
+                            for fr in ["M", "T"]:
+                                payload_slot = [{
+                                    "fecha": dia.isoformat(),
+                                    "plaza_id": plaza_id_vac,
+                                    "franja": fr,
+                                    "owner_usa": False,
+                                    "estado": "CONFIRMADO",
+                                }]
+
+                                r_vac = requests.post(
+                                    f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                                    headers=local_headers,
+                                    json=payload_slot,
+                                    timeout=10,
+                                )
+                                if r_vac.status_code >= 400:
+                                    raise Exception(
+                                        f"Error en {dia} {fr}: "
+                                        f"{r_vac.status_code} – {r_vac.text}"
+                                    )
+                                total_franjas += 1
+
+                            dia += timedelta(days=1)
+
+                        st.success(
+                            f"Modo vacaciones aplicado para {seleccion} "
+                            f"del {fecha_inicio.strftime('%d/%m/%Y')} "
+                            f"al {fecha_fin.strftime('%d/%m/%Y')}. "
+                            f"{total_franjas} franjas marcadas como cedidas."
+                        )
+                    except Exception as e:
+                        st.error("Error al aplicar el modo vacaciones.")
+                        st.code(str(e))
+    
     # ---------------------------
     # 7) Sorteo pre-reservas (ADMIN)
     # ---------------------------
