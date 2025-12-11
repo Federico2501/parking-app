@@ -1299,93 +1299,97 @@ def view_titular(profile):
         cedencias[(d, "T")] = cedida_T
 
     # ---------------------------
-    # 🏖️ Modo vacaciones (TITULAR)
+    # MODO VACACIONES (rango libre hasta 4 semanas)
     # ---------------------------
-    st.markdown("### 🏖️ Modo vacaciones")
+    with st.expander("Modo vacaciones (ceder plaza automáticamente por rango de fechas)"):
+        # Podemos tirar otra vez de get_rest_info sin romper nada
+        rest_url, headers, _ = get_rest_info()
 
-    with st.expander("Ceder automáticamente tu plaza en un rango de fechas"):
-        hoy_local = date.today()
-
-        fecha_inicio_vac = st.date_input(
-            "Fecha inicio de vacaciones",
-            value=hoy_local,
-            min_value=hoy_local,
-            key="tit_vac_fini",
-        )
-
-        fecha_fin_vac = st.date_input(
-            "Fecha fin de vacaciones",
-            value=hoy_local + timedelta(days=5),
-            min_value=fecha_inicio_vac,
-            key="tit_vac_ffin",
-        )
-
-        solo_laborables_vac = st.checkbox(
-            "Solo lunes a viernes",
-            value=True,
-            key="tit_vac_laborables",
-        )
+        hoy_vac = date.today()
+        max_vac_date = hoy_vac + timedelta(days=28)  # ≈ 4 semanas vista
 
         st.caption(
-            "Esto marcará tu plaza como **cedida** (mañana y tarde) para cada día del rango. "
-            "No elimina reservas ya hechas por suplentes."
+            f"Selecciona un rango entre hoy y el {max_vac_date.strftime('%d/%m/%Y')}. "
+            "Solo se ceden días laborables (lunes a viernes), ambas franjas."
         )
 
-        if st.button("Aplicar modo vacaciones", key="btn_tit_vacaciones"):
-            if fecha_fin_vac < fecha_inicio_vac:
-                st.error("La fecha fin no puede ser anterior a la fecha inicio.")
+        col_v1, col_v2 = st.columns(2)
+        vac_ini = col_v1.date_input(
+            "Inicio vacaciones",
+            value=hoy_vac,
+            min_value=hoy_vac,
+            max_value=max_vac_date,
+            key="vac_ini_titular",
+        )
+
+        default_fin = vac_ini + timedelta(days=4)
+        if default_fin > max_vac_date:
+            default_fin = max_vac_date
+
+        vac_fin = col_v2.date_input(
+            "Fin vacaciones",
+            value=default_fin,
+            min_value=vac_ini,
+            max_value=max_vac_date,
+            key="vac_fin_titular",
+        )
+
+        if vac_fin < vac_ini:
+            st.error("La fecha fin de vacaciones no puede ser anterior al inicio.")
+
+        if st.button("Aplicar modo vacaciones en este rango", key="btn_vacaciones_titular"):
+            if vac_fin < vac_ini:
+                st.error("Rango de fechas no válido.")
             else:
-                try:
-                    local_headers_vac = headers.copy()
-                    local_headers_vac["Prefer"] = "resolution=merge-duplicates"
+                errores_vac = []
+                franjas_afectadas = 0
 
-                    dia = fecha_inicio_vac
-                    total_franjas_vac = 0
-
-                    while dia <= fecha_fin_vac:
-                        # Saltar fines de semana si solo_laborables_vac está activo
-                        if solo_laborables_vac and dia.weekday() > 4:
-                            dia += timedelta(days=1)
-                            continue
-
-                        for fr in ["M", "T"]:
-                            payload_slot_vac = [{
-                                "fecha": dia.isoformat(),
+                d = vac_ini
+                while d <= vac_fin:
+                    # Solo lunes-viernes
+                    if d.weekday() < 5 and se_puede_modificar_cesion(d):
+                        for fr in ("M", "T"):
+                            payload = [{
+                                "fecha": d.isoformat(),
                                 "plaza_id": plaza_id,
                                 "franja": fr,
-                                "owner_usa": False,
+                                "owner_usa": False,      # cedida
                                 "estado": "CONFIRMADO",
                             }]
 
-                            r_vac_tit = requests.post(
-                                f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
-                                headers=local_headers_vac,
-                                json=payload_slot_vac,
-                                timeout=10,
-                            )
-                            if r_vac_tit.status_code >= 400:
-                                raise Exception(
-                                    f"Error en {dia} {fr}: "
-                                    f"{r_vac_tit.status_code} – {r_vac_tit.text}"
+                            local_headers = headers.copy()
+                            local_headers["Prefer"] = "resolution=merge-duplicates"
+
+                            try:
+                                r_vac = requests.post(
+                                    f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                                    headers=local_headers,
+                                    json=payload,
+                                    timeout=10,
                                 )
-                            total_franjas_vac += 1
+                                if r_vac.status_code >= 400:
+                                    errores_vac.append(
+                                        f"{d.strftime('%d/%m/%Y')} {fr}: "
+                                        f"{r_vac.status_code} – {r_vac.text}"
+                                    )
+                                else:
+                                    franjas_afectadas += 1
+                            except Exception as e:
+                                errores_vac.append(
+                                    f"{d.strftime('%d/%m/%Y')} {fr}: excepción {e}"
+                                )
+                    d += timedelta(days=1)
 
-                        dia += timedelta(days=1)
-
+                if errores_vac:
+                    st.error("Se han producido errores al aplicar las vacaciones:")
+                    for e in errores_vac:
+                        st.code(e)
+                else:
                     st.success(
-                        f"Modo vacaciones aplicado del "
-                        f"{fecha_inicio_vac.strftime('%d/%m/%Y')} "
-                        f"al {fecha_fin_vac.strftime('%d/%m/%Y')}. "
-                        f"{total_franjas_vac} franjas marcadas como cedidas."
-                    )
-                    st.info(
-                        "Si quieres, revisa ahora la tabla de disponibilidad de esos días "
-                        "para confirmar que aparecen como cedidos."
+                        f"Modo vacaciones aplicado correctamente. "
+                        f"Franjas cedidas en el rango: {franjas_afectadas}."
                     )
                     st.rerun()
-                except Exception as e:
-                    st.error("Error al aplicar el modo vacaciones.")
-                    st.code(str(e))
     
     # ---------------------------
     # GUARDAR CAMBIOS
