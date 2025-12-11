@@ -1299,6 +1299,94 @@ def view_titular(profile):
         cedencias[(d, "T")] = cedida_T
 
     # ---------------------------
+    # 🏖️ Modo vacaciones (TITULAR)
+    # ---------------------------
+    st.markdown("### 🏖️ Modo vacaciones")
+
+    with st.expander("Ceder automáticamente tu plaza en un rango de fechas"):
+        hoy_local = date.today()
+
+        fecha_inicio_vac = st.date_input(
+            "Fecha inicio de vacaciones",
+            value=hoy_local,
+            min_value=hoy_local,
+            key="tit_vac_fini",
+        )
+
+        fecha_fin_vac = st.date_input(
+            "Fecha fin de vacaciones",
+            value=hoy_local + timedelta(days=5),
+            min_value=fecha_inicio_vac,
+            key="tit_vac_ffin",
+        )
+
+        solo_laborables_vac = st.checkbox(
+            "Solo lunes a viernes",
+            value=True,
+            key="tit_vac_laborables",
+        )
+
+        st.caption(
+            "Esto marcará tu plaza como **cedida** (mañana y tarde) para cada día del rango. "
+            "No elimina reservas ya hechas por suplentes."
+        )
+
+        if st.button("Aplicar modo vacaciones", key="btn_tit_vacaciones"):
+            if fecha_fin_vac < fecha_inicio_vac:
+                st.error("La fecha fin no puede ser anterior a la fecha inicio.")
+            else:
+                try:
+                    local_headers_vac = headers.copy()
+                    local_headers_vac["Prefer"] = "resolution=merge-duplicates"
+
+                    dia = fecha_inicio_vac
+                    total_franjas_vac = 0
+
+                    while dia <= fecha_fin_vac:
+                        # Saltar fines de semana si solo_laborables_vac está activo
+                        if solo_laborables_vac and dia.weekday() > 4:
+                            dia += timedelta(days=1)
+                            continue
+
+                        for fr in ["M", "T"]:
+                            payload_slot_vac = [{
+                                "fecha": dia.isoformat(),
+                                "plaza_id": plaza_id,
+                                "franja": fr,
+                                "owner_usa": False,
+                                "estado": "CONFIRMADO",
+                            }]
+
+                            r_vac_tit = requests.post(
+                                f"{rest_url}/slots?on_conflict=fecha,plaza_id,franja",
+                                headers=local_headers_vac,
+                                json=payload_slot_vac,
+                                timeout=10,
+                            )
+                            if r_vac_tit.status_code >= 400:
+                                raise Exception(
+                                    f"Error en {dia} {fr}: "
+                                    f"{r_vac_tit.status_code} – {r_vac_tit.text}"
+                                )
+                            total_franjas_vac += 1
+
+                        dia += timedelta(days=1)
+
+                    st.success(
+                        f"Modo vacaciones aplicado del "
+                        f"{fecha_inicio_vac.strftime('%d/%m/%Y')} "
+                        f"al {fecha_fin_vac.strftime('%d/%m/%Y')}. "
+                        f"{total_franjas_vac} franjas marcadas como cedidas."
+                    )
+                    st.info(
+                        "Si quieres, revisa ahora la tabla de disponibilidad de esos días "
+                        "para confirmar que aparecen como cedidos."
+                    )
+                except Exception as e:
+                    st.error("Error al aplicar el modo vacaciones.")
+                    st.code(str(e))
+    
+    # ---------------------------
     # GUARDAR CAMBIOS
     # ---------------------------
     st.markdown("---")
