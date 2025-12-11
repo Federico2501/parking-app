@@ -1382,6 +1382,7 @@ def view_titular(profile):
                         "Si quieres, revisa ahora la tabla de disponibilidad de esos días "
                         "para confirmar que aparecen como cedidos."
                     )
+                    st.rerun()
                 except Exception as e:
                     st.error("Error al aplicar el modo vacaciones.")
                     st.code(str(e))
