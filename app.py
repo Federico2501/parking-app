@@ -1346,6 +1346,9 @@ def view_titular(profile):
         if vac_fin < vac_ini:
             st.warning("La fecha fin es anterior al inicio. Ajusta el rango antes de aplicar.")
 
+        # -----------------------------------
+        # Botón: aplicar modo vacaciones
+        # -----------------------------------
         if st.button("Aplicar modo vacaciones en este rango", key="btn_vacaciones_titular"):
             if vac_fin < vac_ini:
                 st.error("Rango de fechas no válido: la fecha fin no puede ser anterior al inicio.")
@@ -1399,6 +1402,47 @@ def view_titular(profile):
                         f"Franjas cedidas en el rango: {franjas_afectadas}."
                     )
                     st.rerun()
+
+        # -----------------------------------
+        # Botón: cancelar cesiones futuras
+        # -----------------------------------
+        st.markdown("---")
+        st.caption(
+            "Si te has equivocado, puedes resetear todas las franjas cedidas "
+            "de tu plaza a partir de mañana, siempre que no tengan ya un suplente "
+            "reservado."
+        )
+
+        if st.button("Cancelar cesiones futuras (reset desde mañana)", key="btn_cancel_vac_titular"):
+            manana = hoy_vac + timedelta(days=1)
+
+            try:
+                resp_reset = requests.patch(
+                    f"{rest_url}/slots",
+                    headers=headers,
+                    params={
+                        "plaza_id": f"eq.{plaza_id}",
+                        "fecha": f"gte.{manana.isoformat()}",
+                        "owner_usa": "eq.false",
+                        "reservado_por": "is.null",
+                    },
+                    json={"owner_usa": True},
+                    timeout=10,
+                )
+
+                if resp_reset.status_code >= 400:
+                    st.error("Error al cancelar las cesiones futuras.")
+                    st.code(resp_reset.text)
+                else:
+                    st.success(
+                        "Cesiones futuras sin suplente asignado canceladas correctamente. "
+                        "A partir de mañana vuelves a aparecer como 'Titular usa' en esas franjas."
+                    )
+                    st.rerun()
+
+            except Exception as e:
+                st.error("Error inesperado al cancelar las cesiones futuras.")
+                st.code(str(e))
   
     # ---------------------------
     # GUARDAR CAMBIOS
