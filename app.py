@@ -863,7 +863,7 @@ def view_admin(profile):
 
     filas = []
     for s in sorted(slots_all, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
-        franja_txt = "08 - 14" if s["franja"] == "M" else "14 - 20"
+        franja_txt = "09 - 15" if s["franja"] == "M" else "15 - 21"
 
         titular = plaza_to_titular.get(s["plaza_id"], "-")
         suplente = id_to_nombre.get(s["reservado_por"], "-") if s["reservado_por"] else "-"
@@ -1203,8 +1203,8 @@ def view_titular(profile):
 
     header_cols = st.columns(4)
     header_cols[0].markdown("**Día**")
-    header_cols[1].markdown("**08 - 14**")
-    header_cols[2].markdown("**14 - 20**")
+    header_cols[1].markdown("**09 - 15**")
+    header_cols[2].markdown("**15 - 21**")
     header_cols[3].markdown("**Día completo**")
 
     cedencias = {}
@@ -1603,7 +1603,7 @@ def view_suplente(profile):
     else:
         out_lines = []
         for (f, franja) in claves:
-            fr_txt = "08 - 14" if franja == "M" else "14 - 20"
+            fr_txt = "09 - 15" if franja == "M" else "15 - 21"
             fecha_txt = f.strftime("%a %d/%m")
 
             # 1) Si ya hay slot asignado, prioridad absoluta
@@ -1737,8 +1737,8 @@ def view_suplente(profile):
 
     header = st.columns(4)
     header[0].markdown("**Día**")
-    header[1].markdown("**08 - 14**")
-    header[2].markdown("**14 - 20**")
+    header[1].markdown("**09 - 15**")
+    header[2].markdown("**15 - 21**")
     header[3].markdown("**Día completo**")
 
     cambios = {}
