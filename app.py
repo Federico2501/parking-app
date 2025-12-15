@@ -2581,6 +2581,8 @@ def main():
     # ----------------------------------------------------------
     # 🔥 EJECUCIÓN AUTOMÁTICA DEL SORTEO A PARTIR DE LAS 20:00
     # ----------------------------------------------------------
+    st.caption(f"DEBUG server naive: {datetime.now().isoformat()}")
+    st.caption(f"DEBUG madrid: {datetime.now(ZoneInfo('Europe/Madrid')).isoformat()}")
     hoy = date.today()
     ahora = datetime.now().time()
     limite = time(20, 0)
