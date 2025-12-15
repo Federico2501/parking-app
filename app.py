@@ -892,6 +892,7 @@ def view_admin(profile):
             "plaza_id": s["plaza_id"],
             "owner_usa": s["owner_usa"],
             "reservado_por": s["reservado_por"],
+            "slot_bloqueado_para": s.get("slot_bloqueado_para"),
         })
 
     # Para KPIs/tablero: solo la semana visible (actual o siguiente)
@@ -905,7 +906,7 @@ def view_admin(profile):
     # ---------------------------
     cedidos = [s for s in slots_semana if s["owner_usa"] is False]
     reservados = [s for s in cedidos if s["reservado_por"] is not None]
-    libres = [s for s in cedidos if s["reservado_por"] is None]
+    libres = [s for s in cedidos if s["reservado_por"] is None and (s.get("slot_bloqueado_para") is None)]
 
     st.markdown("### Semana visible")
 
@@ -936,7 +937,9 @@ def view_admin(profile):
         if pid not in plazas_stats:
             continue
 
-        if s["owner_usa"] is False and s["reservado_por"] is None:
+        bloqueado = (s.get("slot_bloqueado_para") is not None)
+
+        if s["owner_usa"] is False and s["reservado_por"] is None and not bloqueado:
             plazas_stats[pid]["libres"] += 1
         else:
             plazas_stats[pid]["ocupadas"] += 1
@@ -984,8 +987,12 @@ def view_admin(profile):
         titular = plaza_to_titular.get(s["plaza_id"], "-")
         suplente = id_to_nombre.get(s["reservado_por"], "-") if s["reservado_por"] else "-"
 
+        bloqueado = (s.get("slot_bloqueado_para") is not None)
+
         if s["owner_usa"] and not s["reservado_por"]:
             estado = "Titular usa"
+        elif not s["owner_usa"] and bloqueado and s["reservado_por"] is None:
+            estado = "Bloqueado EV (carga)"
         elif not s["owner_usa"] and s["reservado_por"] is None:
             estado = "Cedido (libre)"
         elif not s["owner_usa"] and s["reservado_por"] is not None:
