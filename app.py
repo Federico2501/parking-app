@@ -1133,7 +1133,7 @@ def view_admin(profile):
         return "—"
 
     # 6) Construir tabla final por día/slot
-    slot_order = ["9-12", "12-15", "15-18", "18-21"]
+    slot_order = ["9 - 12", "12 - 15", "15 - 18", "18 - 21"]
 
     filas_ev = []
     for d in dias_semana:
