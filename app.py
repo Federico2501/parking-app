@@ -242,7 +242,7 @@ def ejecutar_sorteo(fecha_obj: date):
 
     try:
         resp = requests.post(
-            f"{rest_url}/rpc/ejecutar_sorteo_seguro",
+            f"{rest_url}/rpc/ejecutar_sorteo_con_ev",
             headers=headers,
             json={"fecha_sorteo": fecha_str},
             timeout=30,
