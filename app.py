@@ -6,6 +6,7 @@ import uuid
 import base64
 import json
 from datetime import date, timedelta, datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 st.set_page_config(
     page_title="Parking KM0",
@@ -103,6 +104,73 @@ def se_puede_modificar_slot(fecha_slot: date, accion: str) -> bool:
 
     # --- FUTURO (pasado mañana) ---
     return True
+
+def format_ts_madrid(ts_value):
+    """
+    Convierte un timestamptz de Supabase (string ISO o datetime)
+    a string en hora Madrid.
+    """
+    if ts_value is None:
+        return "-"
+
+    if isinstance(ts_value, str):
+        try:
+            ts_value = ts_value.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(ts_value)
+        except Exception:
+            return ts_value
+    else:
+        dt = ts_value
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    dt_madrid = dt.astimezone(ZoneInfo("Europe/Madrid"))
+    return dt_madrid.strftime("%d/%m/%Y %H:%M:%S")
+
+def get_sorteo_log_for_date(fecha_obj: date):
+    rest_url, headers, _ = get_rest_info()
+    fecha_str = fecha_obj.isoformat()
+    try:
+        resp = requests.get(
+            f"{rest_url}/sorteos_log",
+            headers=headers,
+            params={
+                "select": "fecha,executed_at",
+                "fecha": f"eq.{fecha_str}",
+                "limit": 1,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        rows = resp.json()
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def get_last_sorteo_log():
+    rest_url, headers, _ = get_rest_info()
+    try:
+        resp = requests.get(
+            f"{rest_url}/sorteos_log",
+            headers=headers,
+            params={
+                "select": "fecha,executed_at",
+                "order": "executed_at.desc",
+                "limit": 1,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        rows = resp.json()
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 
 # ---------------------------------------------
 # Sorteo de plazas     
@@ -1029,6 +1097,17 @@ def view_admin(profile):
     # 7) Sorteo pre-reservas (ADMIN)
     # ---------------------------
     st.markdown("### Sorteo de plazas (ADMIN)")
+
+    # Auditoría global (último sorteo ejecutado)
+    last_log = get_last_sorteo_log()
+    if last_log:
+        st.info(
+            f"**Último sorteo ejecutado**: fecha {last_log['fecha']} · "
+            f"{format_ts_madrid(last_log.get('executed_at'))} (hora Madrid)"
+        )
+    else:
+        st.warning("Aún no hay registros en sorteos_log.")
+
     fecha_por_defecto = hoy + timedelta(days=1)
 
     fecha_sorteo = st.date_input(
@@ -1038,6 +1117,18 @@ def view_admin(profile):
         max_value=hoy + timedelta(days=30),
         key="fecha_sorteo_admin",
     )
+
+    # Auditoría por fecha seleccionada
+    log_fecha = get_sorteo_log_for_date(fecha_sorteo)
+    if log_fecha:
+        st.success(
+            f"✅ Sorteo YA ejecutado para {fecha_sorteo.strftime('%d/%m/%Y')} · "
+            f"{format_ts_madrid(log_fecha.get('executed_at'))} (hora Madrid)"
+        )
+    else:
+        st.info(
+            f"ℹ️ Aún no se ha ejecutado el sorteo para {fecha_sorteo.strftime('%d/%m/%Y')}."
+        )
 
     col_sorteo, col_reset = st.columns(2)
 
