@@ -869,7 +869,7 @@ def view_admin(profile):
         resp_slots = requests.get(
             f"{rest_url}/slots",
             headers=headers,
-            params={"select": "fecha,franja,plaza_id,owner_usa,reservado_por"},
+            params={"select": "fecha,franja,plaza_id,owner_usa,reservado_por,slot_bloqueado_para"},
             timeout=10,
         )
         resp_slots.raise_for_status()
