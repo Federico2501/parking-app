@@ -2019,14 +2019,16 @@ def view_suplente(profile):
             # Si hoy no hay plazas (ya lo gestionas), EV también lo bloqueamos por coherencia
             if editable:
                 cols[4].checkbox(
-                    "EV",
+                    "",
                     value=ev_prev_m,
                     key=f"ev_m_{d.isoformat()}",
+                    label_visibility="collapsed"
                 )
                 cols[5].checkbox(
-                    "EV",
+                    "",
                     value=ev_prev_t,
                     key=f"ev_t_{d.isoformat()}",
+                    label_visibility="collapsed"
                 )
             else:
                 cols[4].markdown("—")
