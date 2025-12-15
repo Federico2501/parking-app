@@ -2053,7 +2053,7 @@ def view_suplente(profile):
             else:
                 if editable:
                     full_checked = cols[3].checkbox(
-                        "Día completo", value=default_full, key=key_full
+                        "", value=default_full, key=key_full, label_visibility="collapsed"
                     )
                 else:
                     full_checked = default_full
