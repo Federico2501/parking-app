@@ -1049,6 +1049,141 @@ def view_admin(profile):
         st.info("No hay datos disponibles.")
 
     # ---------------------------
+    # B) 🔌 Tabla ADMIN: Carga EV
+    # ---------------------------
+    st.markdown("### 🔌 Carga EV (ADMIN)")
+
+    # Rango: mismo que la semana visible (fecha_min .. fecha_max)
+    try:
+        # 1) Leer asignaciones EV del rango
+        resp_ev_asig = requests.get(
+            f"{rest_url}/ev_asignaciones",
+            headers=headers,
+            params={
+                "select": "fecha,slot_label,plaza_id,usuario_id,created_at",
+                "fecha": f"gte.{fecha_min.isoformat()}",
+                "fecha": f"lte.{fecha_max.isoformat()}",
+                "order": "fecha.asc,slot_label.asc",
+            },
+            timeout=10,
+        )
+        ev_asig_raw = resp_ev_asig.json() if resp_ev_asig.status_code == 200 else []
+    except Exception:
+        ev_asig_raw = []
+
+    try:
+        # 2) Leer solicitudes EV del rango (para ver pendientes/rechazadas)
+        resp_ev_sol = requests.get(
+            f"{rest_url}/ev_solicitudes",
+            headers=headers,
+            params={
+                "select": "fecha,usuario_id,estado,pref_turno,assigned_slot_label,assigned_plaza_id,updated_at",
+                "fecha": f"gte.{fecha_min.isoformat()}",
+                "fecha": f"lte.{fecha_max.isoformat()}",
+                "order": "fecha.asc,updated_at.desc",
+            },
+            timeout=10,
+        )
+        ev_sol_raw = resp_ev_sol.json() if resp_ev_sol.status_code == 200 else []
+    except Exception:
+        ev_sol_raw = []
+
+    # 3) Mapear asignaciones por (fecha, slot_label)
+    ev_asig_map = {}
+    for r in ev_asig_raw:
+        try:
+            f = date.fromisoformat(str(r["fecha"])[:10])
+            slot_label = r.get("slot_label")
+            ev_asig_map[(f, slot_label)] = r
+        except Exception:
+            continue
+
+    # 4) Mapear solicitudes por fecha (última por usuario ya viene por updated_at desc)
+    #    Aquí hacemos un resumen por día: nº solicitudes, nº pendientes, nº rechazadas, etc.
+    ev_sol_by_day = {}
+    for r in ev_sol_raw:
+        try:
+            f = date.fromisoformat(str(r["fecha"])[:10])
+        except Exception:
+            continue
+        ev_sol_by_day.setdefault(f, []).append(r)
+
+    # 5) Determinar plaza EV "reservada" por día leyendo slots bloqueados (slot_bloqueado_para='EV_CHARGE')
+    #    Usamos slots_semana (ya cargados arriba) porque incluyen slot_bloqueado_para
+    ev_bloqueo_by_day = {}
+    for s in slots_semana:
+        if s.get("slot_bloqueado_para") != "EV_CHARGE":
+            continue
+        f = s["fecha"]
+        pid = s["plaza_id"]
+        fr = s["franja"]
+        ev_bloqueo_by_day.setdefault(f, {"plaza_id": pid, "bloqueo": set()})
+        # Si por lo que sea hay inconsistencia (otra plaza), lo ignoramos y nos quedamos con la primera
+        if ev_bloqueo_by_day[f]["plaza_id"] != pid:
+            continue
+        ev_bloqueo_by_day[f]["bloqueo"].add(fr)
+
+    def _bloqueo_txt(bset: set) -> str:
+        if "M" in bset and "T" in bset:
+            return "M+T"
+        if "M" in bset:
+            return "M"
+        if "T" in bset:
+            return "T"
+        return "—"
+
+    # 6) Construir tabla final por día/slot
+    slot_order = ["9-12", "12-15", "15-18", "18-21"]
+
+    filas_ev = []
+    for d in dias_semana:
+        # info bloqueo de plaza EV del día
+        blk = ev_bloqueo_by_day.get(d)
+        plaza_ev = f"P-{blk['plaza_id']}" if blk else "—"
+        bloqueo = _bloqueo_txt(blk["bloqueo"]) if blk else "—"
+
+        # resumen solicitudes del día
+        sol_dia = ev_sol_by_day.get(d, [])
+        n_sol = len(sol_dia)
+        n_pend = sum(1 for x in sol_dia if x.get("estado") == "PENDIENTE")
+        n_rech = sum(1 for x in sol_dia if x.get("estado") in ("RECHAZADO", "NO_DISPONIBLE"))
+        n_asig = sum(1 for x in sol_dia if x.get("estado") == "ASIGNADO")
+
+        for sl in slot_order:
+            asign = ev_asig_map.get((d, sl))
+
+            if asign:
+                uid = asign.get("usuario_id")
+                nombre = id_to_nombre.get(uid, uid) if uid else "—"
+                filas_ev.append({
+                    "Fecha": d.strftime("%d/%m/%Y"),
+                    "Plaza EV": plaza_ev,
+                    "Bloqueo": bloqueo,
+                    "Slot": sl,
+                    "Asignado a": nombre,
+                    "Solicitudes (día)": n_sol,
+                    "Pendientes": n_pend,
+                    "Asignadas": n_asig,
+                    "No disp./rech.": n_rech,
+                })
+            else:
+                filas_ev.append({
+                    "Fecha": d.strftime("%d/%m/%Y"),
+                    "Plaza EV": plaza_ev,
+                    "Bloqueo": bloqueo,
+                    "Slot": sl,
+                    "Asignado a": "—",
+                    "Solicitudes (día)": n_sol,
+                    "Pendientes": n_pend,
+                    "Asignadas": n_asig,
+                    "No disp./rech.": n_rech,
+                })
+
+    df_ev = pd.DataFrame(filas_ev)
+    st.dataframe(df_ev, use_container_width=True)
+
+    
+    # ---------------------------
     # 7) 🏖️ Modo vacaciones (ADMIN)
     # ---------------------------
     st.markdown("### 🏖️ Modo vacaciones (forzar cesión de plaza)")
