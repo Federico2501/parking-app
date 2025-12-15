@@ -1978,11 +1978,13 @@ def view_suplente(profile):
     # ============================
     st.markdown("### Selecciona las franjas que deseas solicitar:")
 
-    header = st.columns(4)
+    header = st.columns(6)
     header[0].markdown("**Día**")
     header[1].markdown("**09 - 15**")
     header[2].markdown("**15 - 21**")
     header[3].markdown("**Día completo**")
+    header[4].markdown("**EV M**")
+    header[5].markdown("**EV T**")
 
     cambios = {}
 
@@ -1990,7 +1992,7 @@ def view_suplente(profile):
         is_today = (d == hoy)
 
         with st.container():
-            cols = st.columns(4)
+            cols = st.columns(6)
             cols[0].write(d.strftime("%a %d/%m"))
 
             slot_M = reservas_user_sem.get((d, "M"))
@@ -2006,6 +2008,29 @@ def view_suplente(profile):
             # plazas libres por franja para este día
             disp_M = libres.get((d, "M"), 0)
             disp_T = libres.get((d, "T"), 0)
+
+            # ---------------------------
+            # EV (solo UI): precargar desde ev_sol (si existe)
+            # ---------------------------
+            ev_prev = ev_sol.get(d)
+            ev_prev_m = bool(ev_prev) and ev_prev.get("pref_turno") in ("M", "ANY")
+            ev_prev_t = bool(ev_prev) and ev_prev.get("pref_turno") in ("T", "ANY")
+
+            # Si hoy no hay plazas (ya lo gestionas), EV también lo bloqueamos por coherencia
+            if editable:
+                cols[4].checkbox(
+                    "EV",
+                    value=ev_prev_m,
+                    key=f"ev_m_{d.isoformat()}",
+                )
+                cols[5].checkbox(
+                    "EV",
+                    value=ev_prev_t,
+                    key=f"ev_t_{d.isoformat()}",
+                )
+            else:
+                cols[4].markdown("—")
+                cols[5].markdown("—")
 
             # Día completo
             key_full = f"full_{d.isoformat()}"
