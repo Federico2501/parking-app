@@ -32,6 +32,54 @@ def get_rest_info():
 
     return rest_url, headers, anon_key
 
+# ---------------------------------------------
+# EV helpers (solicitudes + asignaciones)
+# ---------------------------------------------
+def ev_upsert_solicitud(fecha_obj: date, usuario_id: str, pref_turno: str, estado: str = "PENDIENTE"):
+    """
+    Crea/actualiza la solicitud EV del usuario para un día (1 fila por usuario+fecha).
+    pref_turno: 'M' | 'T' | 'ANY'
+    estado: por defecto PENDIENTE
+    """
+    rest_url, headers, _ = get_rest_info()
+
+    payload = [{
+        "fecha": fecha_obj.isoformat(),
+        "usuario_id": usuario_id,
+        "pref_turno": pref_turno,
+        "estado": estado,
+    }]
+
+    local_headers = headers.copy()
+    local_headers["Prefer"] = "resolution=merge-duplicates"
+
+    # Upsert por constraint unique(fecha, usuario_id)
+    resp = requests.post(
+        f"{rest_url}/ev_solicitudes?on_conflict=fecha,usuario_id",
+        headers=local_headers,
+        json=payload,
+        timeout=10,
+    )
+    return resp
+
+
+def ev_cancelar_solicitud(fecha_obj: date, usuario_id: str):
+    """Marca como CANCELADO la solicitud EV (si existe) para ese día."""
+    rest_url, headers, _ = get_rest_info()
+
+    resp = requests.patch(
+        f"{rest_url}/ev_solicitudes",
+        headers=headers,
+        params={
+            "fecha": f"eq.{fecha_obj.isoformat()}",
+            "usuario_id": f"eq.{usuario_id}",
+            "estado": "in.(PENDIENTE,ASIGNADO,RECHAZADO,NO_DISPONIBLE)",
+        },
+        json={"estado": "CANCELADO"},
+        timeout=10,
+    )
+    return resp
+
 def _decode_jwt_payload(token: str) -> dict:
     """
     Decodifica SOLO el payload de un JWT sin verificar firma.
@@ -1674,6 +1722,61 @@ def view_suplente(profile):
     except Exception:
         pre_user_raw = []
 
+    # ============================
+    # EV: asignaciones / solicitudes futuras
+    # ============================
+    try:
+        r = requests.get(
+            f"{rest_url}/ev_asignaciones",
+            headers=headers,
+            params={
+                "select": "fecha,plaza_id,slot_label",
+                "usuario_id": f"eq.{user_id}",
+                "fecha": f"gte.{hoy.isoformat()}",
+                "order": "fecha.asc",
+            },
+            timeout=10,
+        )
+        ev_asig_raw = r.json()
+    except Exception:
+        ev_asig_raw = []
+
+    ev_asig = {}
+    for row in ev_asig_raw:
+        try:
+            f = date.fromisoformat(row["fecha"][:10])
+            ev_asig[f] = {
+                "plaza_id": row.get("plaza_id"),
+                "slot_label": row.get("slot_label"),
+            }
+        except Exception:
+            pass
+
+    try:
+        r = requests.get(
+            f"{rest_url}/ev_solicitudes",
+            headers=headers,
+            params={
+                "select": "fecha,estado,pref_turno,assigned_plaza_id,assigned_slot_label",
+                "usuario_id": f"eq.{user_id}",
+                "fecha": f"gte.{hoy.isoformat()}",
+                "order": "fecha.asc",
+            },
+            timeout=10,
+        )
+        ev_sol_raw = r.json()
+    except Exception:
+        ev_sol_raw = []
+
+    ev_sol = {}
+    for row in ev_sol_raw:
+        try:
+            f = date.fromisoformat(row["fecha"][:10])
+            if row.get("estado") != "CANCELADO":
+                ev_sol[f] = row
+        except Exception:
+            pass
+    
     pre_user = {}
     for rpr in pre_user_raw:
         try:
@@ -1728,6 +1831,55 @@ def view_suplente(profile):
                 )
 
         st.markdown("\n".join(out_lines))
+
+    # Añadir resumen EV (por día)
+    # Mostramos solo días donde haya solicitud o asignación EV
+    dias_ev = sorted(set(ev_asig.keys()) | set(ev_sol.keys()))
+    if dias_ev:
+        out_ev = []
+        out_ev.append("")
+        out_ev.append("**🔌 Carga EV (slots de 3h)**")
+
+        for f in dias_ev:
+            fecha_txt = f.strftime("%a %d/%m")
+
+            # Si ya hay asignación, prioridad
+            if f in ev_asig:
+                plaza = ev_asig[f].get("plaza_id")
+                slot = ev_asig[f].get("slot_label")
+                out_ev.append(
+                    f"- {fecha_txt} – Carga EV asignada: **{slot}** (P-{plaza})"
+                )
+                continue
+
+            sol = ev_sol.get(f)
+            if not sol:
+                continue
+
+            est = sol.get("estado")
+            pref = sol.get("pref_turno")
+            pref_txt = {"M": "mañana", "T": "tarde", "ANY": "mañana/tarde"}.get(pref, "—")
+
+            if est == "PENDIENTE":
+                out_ev.append(
+                    f"- {fecha_txt} – Solicitud carga EV pendiente ({pref_txt})"
+                )
+            elif est == "ASIGNADO":
+                slot = sol.get("assigned_slot_label") or "—"
+                plaza = sol.get("assigned_plaza_id") or "—"
+                out_ev.append(
+                    f"- {fecha_txt} – Carga EV asignada: **{slot}** (P-{plaza})"
+                )
+            elif est in ("RECHAZADO", "NO_DISPONIBLE"):
+                out_ev.append(
+                    f"- {fecha_txt} – Carga EV: no disponible"
+                )
+            else:
+                out_ev.append(
+                    f"- {fecha_txt} – Carga EV: {est}"
+                )
+
+        st.markdown("\n".join(out_ev))
 
     # ============================
     # 3) Semana inteligente
