@@ -135,8 +135,9 @@ def se_puede_modificar_slot(fecha_slot: date, accion: str) -> bool:
       - FECHAS POSTERIORES A MAÑANA:
            * reservado/cancelado permitido siempre
     """
-    hoy = date.today()
-    ahora = datetime.now().time()
+    now_madrid = datetime.now(ZoneInfo("Europe/Madrid"))
+    hoy = now_madrid.date()
+    ahora = now_madrid.time()
     limite = time(20, 0)
 
     # --- HOY ---
@@ -1407,8 +1408,10 @@ def view_titular(profile):
     # Helper: ¿puede modificar la cesión?
     # ---------------------------
     def se_puede_modificar_cesion(fecha_slot: date) -> bool:
-        hoy = date.today()
-        ahora = datetime.now().time()
+
+        now_madrid = datetime.now(ZoneInfo("Europe/Madrid"))
+        hoy = now_madrid.date()
+        ahora = now_madrid.time()
         limite = time(20, 0)
 
         if fecha_slot == hoy:
