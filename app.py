@@ -2318,6 +2318,45 @@ def view_suplente(profile):
                                 f"{resp_cancel.status_code} – {resp_cancel.text}"
                             )
 
+            # ============================
+            # 7.B) Guardar solicitudes EV (1 fila por día / sin duplicados)
+            # ============================
+            for d in dias_semana:
+                ev_m = st.session_state.get(f"ev_m_{d.isoformat()}", False)
+                ev_t = st.session_state.get(f"ev_t_{d.isoformat()}", False)
+
+                if ev_m and ev_t:
+                    pref = "ANY"
+                elif ev_m:
+                    pref = "M"
+                elif ev_t:
+                    pref = "T"
+                else:
+                    pref = None
+
+                if pref:
+                    r_ev = ev_upsert_solicitud(
+                        fecha_obj=d,
+                        usuario_id=user_id,
+                        pref_turno=pref,
+                        estado="PENDIENTE",
+                    )
+                    if getattr(r_ev, "status_code", 500) >= 400:
+                        errores.append(
+                            f"Error guardando EV {d.strftime('%d/%m/%Y')}: "
+                            f"{r_ev.status_code} – {r_ev.text}"
+                        )
+                else:
+                    r_ev = ev_cancelar_solicitud(
+                        fecha_obj=d,
+                        usuario_id=user_id,
+                    )
+                    if getattr(r_ev, "status_code", 500) >= 400:
+                        errores.append(
+                            f"Error cancelando EV {d.strftime('%d/%m/%Y')}: "
+                            f"{r_ev.status_code} – {r_ev.text}"
+                        )
+
             if errores:
                 st.error("Se han producido errores al guardar las solicitudes:")
                 for e in errores:
