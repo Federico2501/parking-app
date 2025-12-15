@@ -2582,8 +2582,9 @@ def main():
     # 🔥 EJECUCIÓN AUTOMÁTICA DEL SORTEO A PARTIR DE LAS 20:00
     # ----------------------------------------------------------
 
-    hoy = date.today()
-    ahora = datetime.now().time()
+    now_madrid = datetime.now(ZoneInfo("Europe/Madrid"))
+    hoy = now_madrid.date()
+    ahora = now_madrid.time()
     limite = time(20, 0)
     fecha_sorteo = hoy + timedelta(days=1)
 
