@@ -879,7 +879,7 @@ def render_admin_dashboard_rest(rest_url, headers):
             if df.empty:
                 st.info("Sin datos.")
             else:
-                df["ratio_cesion"] = df["ratio_cesion"].fillna(0)
+                df["ratio_cesion"] = (df["ratio_cesion"].fillna(0) * 100).round(0).astype(int).astype(str) + "%"
                 st.dataframe(
                     df[["nombre", "plaza_id", "franjas_totales", "franjas_cedidas", "ratio_cesion"]],
                     use_container_width=True,
