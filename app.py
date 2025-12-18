@@ -938,7 +938,7 @@ def render_admin_dashboard_rest(rest_url, headers):
                 st.info("Sin datos.")
             else:
                 mat = df.pivot(index="week_start", columns="nombre", values="valor").fillna(0).astype(int)
-                st.dataframe(mat.style.background_gradient(axis=None), use_container_width=True)
+                st.dataframe(mat, use_container_width=True)
         except Exception as ex:
             st.error(f"Error heatmap suplentes: {ex}")
 
@@ -952,7 +952,7 @@ def render_admin_dashboard_rest(rest_url, headers):
                 st.info("Sin datos.")
             else:
                 mat = df.pivot(index="week_start", columns="nombre", values="valor").fillna(0).astype(int)
-                st.dataframe(mat.style.background_gradient(axis=None), use_container_width=True)
+                st.dataframe(mat, use_container_width=True)
         except Exception as ex:
             st.error(f"Error heatmap titulares: {ex}")
 
