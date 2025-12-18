@@ -790,6 +790,163 @@ def password_change_panel():
             except Exception as e:
                 st.error("Error al conectar con el servidor de autenticación.")
                 st.code(str(e))
+
+# ---------------------------------------------
+# Dashboard ADMIN (solo lectura)
+# ---------------------------------------------
+DOW_MAP = {1: "Lun", 2: "Mar", 3: "Mié", 4: "Jue", 5: "Vie"}
+
+def call_rpc_rest(rest_url: str, headers: dict, fn_name: str, payload: dict):
+    """
+    Llama a un RPC de Supabase vía REST: POST /rest/v1/rpc/<fn>
+    Devuelve lista o dict, según el RPC.
+    """
+    resp = requests.post(
+        f"{rest_url}/rpc/{fn_name}",
+        headers=headers,
+        json=payload,
+        timeout=20,
+    )
+    if resp.status_code >= 400:
+        raise Exception(f"{fn_name}: {resp.status_code} – {resp.text[:400]}")
+    return resp.json()
+
+def render_admin_dashboard_rest(rest_url, headers):
+    st.header("📊 Dashboard ADMIN (histórico)")
+
+    # Filtros únicos
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        desde = st.date_input("Desde", value=date.today() - timedelta(days=30), key="dash_desde")
+    with col2:
+        hasta = st.date_input("Hasta", value=date.today(), key="dash_hasta")
+    with col3:
+        franja_ui = st.radio("Franja", ["Ambas", "M", "T"], horizontal=True, key="dash_franja")
+
+    franja = "ALL" if franja_ui == "Ambas" else franja_ui
+    params = {"desde": str(desde), "hasta": str(hasta), "franja": franja}
+
+    # KPIs globales (incluye desperdicio)
+    st.subheader("KPIs globales (L-V)")
+    try:
+        k = call_rpc_rest(rest_url, headers, "admin_kpis_globales", params)
+        # este RPC devuelve JSON (dict)
+        if isinstance(k, dict):
+            a, b, c, d, e, f = st.columns(6)
+            a.metric("Franjas cedidas", k.get("cedidas"))
+            b.metric("Cedidas ocupadas", k.get("ocupadas_cedidas"))
+            c.metric("Eficiencia", f"{(k.get('eficiencia_cesion') or 0):.0%}" if k.get("eficiencia_cesion") is not None else "—")
+            d.metric("Desperdicio", f"{(k.get('desperdicio') or 0):.0%}" if k.get("desperdicio") is not None else "—")
+            e.metric("Sin ocupar (abs)", k.get("cedidas_sin_ocupar"))
+            f.metric("Supl/Tit activos", f"{k.get('suplentes_activos')} / {k.get('titulares_activos')}")
+        else:
+            st.info("No hay datos para ese rango.")
+    except Exception as ex:
+        st.error(f"Error KPIs globales: {ex}")
+
+    tabs = st.tabs([
+        "Suplentes",
+        "Titulares",
+        "Semana (L-V)",
+        "Heatmap Suplentes",
+        "Heatmap Titulares",
+    ])
+
+    # Suplentes
+    with tabs[0]:
+        st.subheader("Suplentes (solicitudes vivas vs asignadas vs usos)")
+        try:
+            data = call_rpc_rest(rest_url, headers, "admin_suplentes_resumen", params)
+            df = pd.DataFrame(data or [])
+            if df.empty:
+                st.info("Sin datos.")
+            else:
+                df["ratio_exito"] = df["ratio_exito"].fillna(0)
+                st.dataframe(
+                    df[["nombre", "solicitudes", "asignadas", "ratio_exito", "usos_franjas"]],
+                    use_container_width=True,
+                    hide_index=True
+                )
+        except Exception as ex:
+            st.error(f"Error tabla suplentes: {ex}")
+
+    # Titulares
+    with tabs[1]:
+        st.subheader("Titulares (cesiones)")
+        try:
+            data = call_rpc_rest(rest_url, headers, "admin_titulares_resumen", params)
+            df = pd.DataFrame(data or [])
+            if df.empty:
+                st.info("Sin datos.")
+            else:
+                df["ratio_cesion"] = df["ratio_cesion"].fillna(0)
+                st.dataframe(
+                    df[["nombre", "plaza_id", "franjas_totales", "franjas_cedidas", "ratio_cesion"]],
+                    use_container_width=True,
+                    hide_index=True
+                )
+        except Exception as ex:
+            st.error(f"Error tabla titulares: {ex}")
+
+    # Tabla M/T x día semana (L-V)
+    with tabs[2]:
+        st.subheader("M/T × Día de la semana (L-V)")
+        modo = st.radio("Mostrar", ["Cesiones", "Usos", "%Uso"], horizontal=True, key="dash_semana_modo")
+
+        try:
+            data = call_rpc_rest(rest_url, headers, "admin_tabla_semana", params)
+            df = pd.DataFrame(data or [])
+            if df.empty:
+                st.info("Sin datos.")
+            else:
+                df["dow_label"] = df["isodow"].map(DOW_MAP)
+                value_col = {"Cesiones": "cedidas", "Usos": "ocupadas", "%Uso": "pct_uso"}[modo]
+
+                pivot = df.pivot(index="franja_out", columns="dow_label", values=value_col)
+
+                # Solo L-V
+                pivot = pivot.reindex(columns=list(DOW_MAP.values()))
+
+                # Orden filas M,T
+                pivot = pivot.reindex(index=[x for x in ["M", "T"] if x in pivot.index])
+
+                if modo == "%Uso":
+                    st.dataframe(pivot.applymap(lambda x: f"{x:.0%}" if pd.notnull(x) else "—"),
+                                 use_container_width=True)
+                else:
+                    st.dataframe(pivot.fillna(0).astype(int),
+                                 use_container_width=True)
+        except Exception as ex:
+            st.error(f"Error tabla semana: {ex}")
+
+    # Heatmap suplentes (semanas x usuarios)
+    with tabs[3]:
+        st.subheader("Heatmap semanal – Suplentes (usos)")
+        try:
+            data = call_rpc_rest(rest_url, headers, "admin_heatmap_suplentes", params)
+            df = pd.DataFrame(data or [])
+            if df.empty:
+                st.info("Sin datos.")
+            else:
+                mat = df.pivot(index="week_start", columns="nombre", values="valor").fillna(0).astype(int)
+                st.dataframe(mat.style.background_gradient(axis=None), use_container_width=True)
+        except Exception as ex:
+            st.error(f"Error heatmap suplentes: {ex}")
+
+    # Heatmap titulares (semanas x usuarios)
+    with tabs[4]:
+        st.subheader("Heatmap semanal – Titulares (cesiones)")
+        try:
+            data = call_rpc_rest(rest_url, headers, "admin_heatmap_titulares", params)
+            df = pd.DataFrame(data or [])
+            if df.empty:
+                st.info("Sin datos.")
+            else:
+                mat = df.pivot(index="week_start", columns="nombre", values="valor").fillna(0).astype(int)
+                st.dataframe(mat.style.background_gradient(axis=None), use_container_width=True)
+        except Exception as ex:
+            st.error(f"Error heatmap titulares: {ex}")
+
 # ---------------------------------------------
 # Vistas por rol
 # ---------------------------------------------
@@ -1328,6 +1485,9 @@ def view_admin(profile):
 
     if col_reset.button("Reiniciar sorteos de esta fecha"):
         cancelar_sorteo(fecha_sorteo)
+    st.markdown("---")
+    render_admin_dashboard_rest(rest_url, headers)
+
 
 
 
