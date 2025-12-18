@@ -881,10 +881,19 @@ def render_admin_dashboard_rest(rest_url, headers):
             else:
                 df["ratio_cesion"] = (df["ratio_cesion"].fillna(0) * 100).round(0).astype(int).astype(str) + "%"
                 st.dataframe(
-                    df[["nombre", "plaza_id", "franjas_totales", "franjas_cedidas", "ratio_cesion"]],
+                    df[[
+                        "nombre",
+                        "plaza_id",
+                        "franjas_max",
+                        "franjas_usadas_titular",
+                        "franjas_cedidas",
+                        "franjas_sin_registro",
+                        "ratio_cesion"
+                    ]],
                     use_container_width=True,
                     hide_index=True
                 )
+
         except Exception as ex:
             st.error(f"Error tabla titulares: {ex}")
 
