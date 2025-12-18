@@ -861,7 +861,7 @@ def render_admin_dashboard_rest(rest_url, headers):
             if df.empty:
                 st.info("Sin datos.")
             else:
-                df["ratio_exito"] = df["ratio_exito"].fillna(0)
+                df["ratio_exito"] = (df["ratio_exito"].fillna(0) * 100).round(0).astype(int).astype(str) + "%"
                 st.dataframe(
                     df[["nombre", "solicitudes", "asignadas", "ratio_exito", "usos_franjas"]],
                     use_container_width=True,
