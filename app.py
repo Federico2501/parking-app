@@ -956,6 +956,12 @@ def view_admin(profile):
     st.write(f"Nombre: {profile.get('nombre')}")
 
     rest_url, headers, _ = get_rest_info()
+    # Headers autenticados como el usuario ADMIN (para que auth.uid() funcione en RPC)
+    auth = st.session_state.get("auth")
+    access_token = auth.get("access_token") if auth else None
+
+    admin_headers = headers.copy()
+    admin_headers["Authorization"] = f"Bearer {access_token}"
 
     # ---------------------------
     # 1) Cargar todos los usuarios
@@ -1486,7 +1492,7 @@ def view_admin(profile):
     if col_reset.button("Reiniciar sorteos de esta fecha"):
         cancelar_sorteo(fecha_sorteo)
     st.markdown("---")
-    render_admin_dashboard_rest(rest_url, headers)
+    render_admin_dashboard_rest(rest_url, admin_headers)
 
 
 
