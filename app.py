@@ -5,6 +5,7 @@ import random
 import uuid
 import base64
 import json
+import matplotlib
 from datetime import date, timedelta, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
