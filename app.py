@@ -824,7 +824,7 @@ def render_admin_dashboard_rest(rest_url, headers):
         franja_ui = st.radio("Franja", ["Ambas", "M", "T"], horizontal=True, key="dash_franja")
 
     franja = "ALL" if franja_ui == "Ambas" else franja_ui
-    params = {"desde": str(desde), "hasta": str(hasta), "franja": franja}
+    params = {"desde": str(desde), "hasta": str(hasta), "franja": p_franja}
 
     # KPIs globales (incluye desperdicio)
     st.subheader("KPIs globales (L-V)")
