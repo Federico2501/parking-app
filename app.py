@@ -838,11 +838,11 @@ def render_admin_dashboard_rest(rest_url, headers):
             cedidas = k.get("cedidas") or 0
             ratio_generosidad = (cedidas / total) if total else None
             
-            k1.metric("Franjas totales", total)
-            k2.metric("Franjas cedidas", cedidas)
-            k3.metric("Cedidas / totales", f"{ratio_generosidad:.0%}" if ratio_generosidad is not None else "—")
-            k4.metric("Cedidas ocupadas", k.get("ocupadas_cedidas"))
-            k5.metric("Eficiencia", f"{(k.get('eficiencia_cesion') or 0):.0%}" if k.get("eficiencia_cesion") is not None else "—")
+            k1.metric("Total", total)
+            k2.metric("Cedidas", cedidas)
+            k3.metric("%Cesión", f"{ratio_generosidad:.0%}" if ratio_generosidad is not None else "—")
+            k4.metric("Aprovechadas", k.get("ocupadas_cedidas"))
+            k5.metric("%Uso", f"{(k.get('eficiencia_cesion') or 0):.0%}" if k.get("eficiencia_cesion") is not None else "—")
             k6.metric("Desperdicio", f"{(k.get('desperdicio') or 0):.0%}" if k.get("desperdicio") is not None else "—")
             k7.metric("Supl/Tit activos", f"{k.get('suplentes_activos')} / {k.get('titulares_activos')}")
         else:
