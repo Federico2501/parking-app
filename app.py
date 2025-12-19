@@ -832,13 +832,19 @@ def render_admin_dashboard_rest(rest_url, headers):
         k = call_rpc_rest(rest_url, headers, "admin_kpis_globales", params)
         # este RPC devuelve JSON (dict)
         if isinstance(k, dict):
-            a, b, c, d, e, f = st.columns(6)
-            a.metric("Franjas cedidas", k.get("cedidas"))
-            b.metric("Cedidas ocupadas", k.get("ocupadas_cedidas"))
-            c.metric("Eficiencia", f"{(k.get('eficiencia_cesion') or 0):.0%}" if k.get("eficiencia_cesion") is not None else "—")
-            d.metric("Desperdicio", f"{(k.get('desperdicio') or 0):.0%}" if k.get("desperdicio") is not None else "—")
-            e.metric("Sin ocupar (abs)", k.get("cedidas_sin_ocupar"))
-            f.metric("Supl/Tit activos", f"{k.get('suplentes_activos')} / {k.get('titulares_activos')}")
+            k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
+            
+            total = k.get("total_slots") or 0
+            cedidas = k.get("cedidas") or 0
+            ratio_generosidad = (cedidas / total) if total else None
+            
+            k1.metric("Franjas totales", total)
+            k2.metric("Franjas cedidas", cedidas)
+            k3.metric("Cedidas / totales", f"{ratio_generosidad:.0%}" if ratio_generosidad is not None else "—")
+            k4.metric("Cedidas ocupadas", k.get("ocupadas_cedidas"))
+            k5.metric("Eficiencia", f"{(k.get('eficiencia_cesion') or 0):.0%}" if k.get("eficiencia_cesion") is not None else "—")
+            k6.metric("Desperdicio", f"{(k.get('desperdicio') or 0):.0%}" if k.get("desperdicio") is not None else "—")
+            k7.metric("Supl/Tit activos", f"{k.get('suplentes_activos')} / {k.get('titulares_activos')}")
         else:
             st.info("No hay datos para ese rango.")
     except Exception as ex:
