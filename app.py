@@ -1643,7 +1643,7 @@ def view_titular(profile):
             headers=headers,
             params=[
                 ("select", "fecha,franja,owner_usa,reservado_por"),
-                ("plaza_id", f"eq.{plaza_id}",
+                ("plaza_id", f"eq.{plaza_id}"),
                 ("fecha", f"gte.{min_d}"),
                 ("fecha", f"lte.{max_d}"),
                 ("order", "fecha.asc,franja.asc"),
