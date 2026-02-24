@@ -1161,12 +1161,55 @@ def view_admin(profile):
             ccols[j].markdown(html, unsafe_allow_html=True)
 
     # ---------------------------
-    # 6) Tabla detalle HISTÓRICA con Mes/Año
+    # 6.A) Dataset para "Detalle de slots" (ADMIN) = hoy ± 7 días
+    # ---------------------------
+    hoy_admin = date.today()
+    detalle_min = hoy_admin - timedelta(days=7)
+    detalle_max = hoy_admin + timedelta(days=7)
+    
+    try:
+        resp_slots_detalle = requests.get(
+            f"{rest_url}/slots",
+            headers=headers,
+            params=[
+                ("select", "fecha,franja,plaza_id,owner_usa,reservado_por,slot_bloqueado_para"),
+                ("fecha", f"gte.{detalle_min.isoformat()}"),
+                ("fecha", f"lte.{detalle_max.isoformat()}"),
+                ("order", "fecha.asc,franja.asc,plaza_id.asc"),
+                ("limit", "20000"),
+            ],
+            timeout=10,
+        )
+        resp_slots_detalle.raise_for_status()
+        slots_detalle_raw = resp_slots_detalle.json()
+    except Exception as e:
+        st.error("No se han podido cargar los slots para el detalle (±7 días).")
+        st.code(str(e))
+        slots_detalle_raw = []
+    
+    slots_detalle = []
+    for s in slots_detalle_raw:
+        try:
+            f = date.fromisoformat(str(s["fecha"])[:10])
+        except Exception:
+            continue
+        slots_detalle.append({
+            "fecha": f,
+            "franja": s["franja"],
+            "plaza_id": s["plaza_id"],
+            "owner_usa": s["owner_usa"],
+            "reservado_por": s["reservado_por"],
+            "slot_bloqueado_para": s.get("slot_bloqueado_para"),
+        })    
+
+    
+    # ---------------------------
+    # 6.B) Tabla detalle HISTÓRICA con Mes/Año
     # ---------------------------
     st.markdown("### Detalle de slots")
 
     filas = []
-    for s in sorted(slots_all, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
+    for s in sorted(slots_detalle, key=lambda x: (x["fecha"], x["franja"], x["plaza_id"])):
         franja_txt = "09 - 15" if s["franja"] == "M" else "15 - 21"
 
         titular = plaza_to_titular.get(s["plaza_id"], "-")
