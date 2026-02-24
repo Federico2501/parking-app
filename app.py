@@ -2258,12 +2258,7 @@ def view_suplente(profile):
         )
         r.raise_for_status()
         slots_raw = r.json()
-
-        st.write("slots_raw len:", len(slots_raw))
-        if slots_raw:
-            st.write("min fecha devuelta:", min(x["fecha"] for x in slots_raw))
-            st.write("max fecha devuelta:", max(x["fecha"] for x in slots_raw))
-            
+        
     except Exception as e:
         st.write("Error slots:", e)
         slots_raw = []
