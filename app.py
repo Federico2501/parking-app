@@ -1634,13 +1634,21 @@ def view_titular(profile):
 
     # Leer slots de esta plaza (todas fechas)
     try:
+        hoy_local = date.today()
+        min_d = hoy_local.isoformat()
+        max_d = (hoy_local + timedelta(days=7)).isoformat()
+        
         resp = requests.get(
             f"{rest_url}/slots",
             headers=headers,
-            params={
-                "select": "fecha,franja,owner_usa,reservado_por",
-                "plaza_id": f"eq.{plaza_id}",
-            },
+            params=[
+                ("select", "fecha,franja,owner_usa,reservado_por"),
+                ("plaza_id", f"eq.{plaza_id}",
+                ("fecha", f"gte.{min_d}"),
+                ("fecha", f"lte.{max_d}"),
+                ("order", "fecha.asc,franja.asc"),
+                ("limit", "5000"),
+            ],
             timeout=10,
         )
         slots = resp.json() if resp.status_code == 200 else []
