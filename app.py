@@ -1657,6 +1657,13 @@ def view_titular(profile):
         st.code(str(e))
         slots = []
 
+        if slots:
+            st.caption(f"DEBUG titular slots: {len(slots)} filas · "
+                   f"min={min(x['fecha'][:10] for x in slots)} · "
+                   f"max={max(x['fecha'][:10] for x in slots)}")
+        else:
+            st.caption("DEBUG titular slots: 0 filas")
+
     # Mapeos
     estado = {}
     reservas = {}
