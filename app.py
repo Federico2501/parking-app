@@ -2239,14 +2239,16 @@ def view_suplente(profile):
         r = requests.get(
             f"{rest_url}/slots",
             headers=headers,
-            params={
-                "select": "fecha,franja,owner_usa,reservado_por,plaza_id,slot_bloqueado_para",
-                "fecha": f"gte.{min_d}",
-                "fecha": f"lte.{max_d}",
-                "order": "fecha.asc,franja.asc,plaza_id.asc",
-            },
+            params=[
+                ("select", "fecha,franja,owner_usa,reservado_por,plaza_id,slot_bloqueado_para"),
+                ("fecha", f"gte.{min_d}"),
+                ("fecha", f"lte.{max_d}"),
+                ("order", "fecha.asc,franja.asc,plaza_id.asc"),
+                ("limit", "5000"),
+            ],
             timeout=10,
         )
+        r.raise_for_status()
         slots_raw = r.json()
 
         st.write("slots_raw len:", len(slots_raw))
@@ -2254,7 +2256,8 @@ def view_suplente(profile):
             st.write("min fecha devuelta:", min(x["fecha"] for x in slots_raw))
             st.write("max fecha devuelta:", max(x["fecha"] for x in slots_raw))
             
-    except Exception:
+    except Exception as e:
+        st.write("Error slots:", e)
         slots_raw = []
 
     from collections import defaultdict
