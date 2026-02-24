@@ -1042,13 +1042,19 @@ def view_admin(profile):
     fecha_max = dias_semana[-1]
 
     # ---------------------------
-    # 3) Cargar TODOS los slots (histórico completo)
+    # 3) Cargar slots de rango semana visible (evitamos limite REST)
     # ---------------------------
     try:
         resp_slots = requests.get(
             f"{rest_url}/slots",
             headers=headers,
-            params={"select": "fecha,franja,plaza_id,owner_usa,reservado_por,slot_bloqueado_para"},
+            params=[
+                ("select", "fecha,franja,plaza_id,owner_usa,reservado_por,slot_bloqueado_para"
+                ("fecha", f"gte.{fecha_min.isoformat()}"),
+                ("fecha", f"lte.{fecha_max.isoformat()}"),
+                ("order", "fecha.asc,franja.asc,plaza_id.asc"),
+                ("limit", "5000"),
+            ],     
             timeout=10,
         )
         resp_slots.raise_for_status()
