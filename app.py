@@ -2248,6 +2248,12 @@ def view_suplente(profile):
             timeout=10,
         )
         slots_raw = r.json()
+
+        st.write("slots_raw len:", len(slots_raw))
+        if slots_raw:
+            st.write("min fecha devuelta:", min(x["fecha"] for x in slots_raw))
+            st.write("max fecha devuelta:", max(x["fecha"] for x in slots_raw))
+            
     except Exception:
         slots_raw = []
 
