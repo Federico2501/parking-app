@@ -2233,11 +2233,17 @@ def view_suplente(profile):
     # 4) Leer slots agregados (todas plazas de esos días)
     # ============================
     try:
+        min_d = hoy.isoformat()
+        max_d = (hoy + timedelta(days=7)).isoformat()
+        
         r = requests.get(
             f"{rest_url}/slots",
             headers=headers,
             params={
-                "select": "fecha,franja,owner_usa,reservado_por,plaza_id",
+                "select": "fecha,franja,owner_usa,reservado_por,plaza_id,slot_bloqueado_para",
+                "fecha": f"gte.{min_d}",
+                "fecha": f"lte.{max_d}",
+                "order": "fecha.asc,franja.asc,plaza_id.asc",
             },
             timeout=10,
         )
@@ -2264,7 +2270,7 @@ def view_suplente(profile):
         if s["reservado_por"] == user_id:
             reservas_user_sem[(f, fr)] = s["plaza_id"]
 
-        if s["owner_usa"] is False and s["reservado_por"] is None:
+        if s["owner_usa"] is False and s["reservado_por"] is None and s.get("slot_bloqueado_para") is None:
             libres[(f, fr)] += 1
 
     # ============================
