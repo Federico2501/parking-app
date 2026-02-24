@@ -1049,7 +1049,7 @@ def view_admin(profile):
             f"{rest_url}/slots",
             headers=headers,
             params=[
-                ("select", "fecha,franja,plaza_id,owner_usa,reservado_por,slot_bloqueado_para"
+                ("select", "fecha,franja,plaza_id,owner_usa,reservado_por,slot_bloqueado_para"),
                 ("fecha", f"gte.{fecha_min.isoformat()}"),
                 ("fecha", f"lte.{fecha_max.isoformat()}"),
                 ("order", "fecha.asc,franja.asc,plaza_id.asc"),
