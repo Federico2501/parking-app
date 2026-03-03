@@ -8,6 +8,10 @@ import json
 from datetime import date, timedelta, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
+st.write("Streamlit version:", st.__version__)
+st.write("Matplotlib version:", matplotlib.__version__)
+
+
 st.set_page_config(
     page_title="Parking KM0",
     page_icon="Logo_KM0.png"
